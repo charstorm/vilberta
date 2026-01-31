@@ -1,0 +1,8 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.10.0+cpu
+torchaudio>=2.10.0+cpu
+scipy>=1.17.0
+pocket-tts>=1.0.3
+pysilero-vad>=3.2.0
+openai>=2.8.0
+sounddevice>=0.5.5
