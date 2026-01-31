@@ -12,14 +12,27 @@ from queue import Queue, Empty
 
 from vilberta.config import MODEL_NAME, TTS_VOICE, SAMPLE_RATE
 
+
+@dataclass
+class RequestStats:
+    audio_duration_s: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    ttft_s: float = 0.0       # time to first token
+    total_latency_s: float = 0.0
+    cost_usd: float = 0.0
+
 # Ensure the locale supports UTF-8 box-drawing characters.
 locale.setlocale(locale.LC_ALL, "")
 
 
 @dataclass
 class DisplayEvent:
-    type: str  # "speak", "text", "transcript", "status", "error", "vad", "boot"
+    type: str  # "speak", "text", "transcript", "status", "error", "vad", "boot", "stats"
     content: str
+    stats: RequestStats | None = None
 
 
 # ── Color palette ────────────────────────────────────────────────────────────
@@ -88,9 +101,9 @@ class CursesTUI:
         self._stdscr: curses.window | None = None
         self._lock = threading.Lock()
 
-        # Left panel — current speech
-        self._speaking_text = ""
-        self._speaking_active = False
+        # Left panel — event log (slot, text), max 20 entries
+        self._event_log: list[tuple[int, str]] = []
+        self._EVENT_LOG_MAX = 20
 
         # Right panel — conversation log
         # Each entry: (color_pair_slot, prefix_slot, prefix, text)
@@ -101,8 +114,12 @@ class CursesTUI:
         self._vad_active = False
         self._exchange_count = 0
 
-        # Track whether we're inside an AI text block
-        self._in_ai_block = False
+        # Track whether we're inside an AI voice/text block
+        self._in_ai_voice_block = False
+        self._in_ai_text_block = False
+
+        # Last request stats
+        self._last_stats: RequestStats | None = None
 
     def _init_curses(self) -> curses.window:
         stdscr = curses.initscr()
@@ -227,6 +244,12 @@ class CursesTUI:
         self._draw_status(h, w)
         scr.refresh()
 
+    def _add_log(self, slot: int, text: str) -> None:
+        with self._lock:
+            self._event_log.append((slot, text))
+            if len(self._event_log) > self._EVENT_LOG_MAX:
+                self._event_log = self._event_log[-self._EVENT_LOG_MAX:]
+
     def _draw_left(self, left_w: int, h: int) -> None:
         x0 = 2
         cw = left_w - x0 - 1
@@ -241,26 +264,55 @@ class CursesTUI:
 
         # Separator at row 3 drawn by _draw()
 
-        # ── Speaking state ──
-        row = 4
-        if self._speaking_active:
-            self._put(row, x0, "SPEAKING", _cp(_SLOT_YELLOW) | curses.A_BOLD)
-        else:
-            self._put(row, x0, "idle", _cp(_SLOT_DIM))
-        row += 2  # blank line before speech text
+        # ── Stats section (fixed area rows 4–12) ──
+        stats_start = 4
+        stats_end = min(12, body_end)  # up to 9 rows for stats
+        stats = self._last_stats
+        if stats is not None:
+            stat_lines = [
+                ("audio",   f"{stats.audio_duration_s:.1f}s"),
+                ("ttft",    f"{stats.ttft_s:.2f}s"),
+                ("latency", f"{stats.total_latency_s:.2f}s"),
+                ("in tok",  f"{stats.input_tokens:,}"),
+                ("out tok", f"{stats.output_tokens:,}"),
+            ]
+            if stats.cache_read_tokens:
+                stat_lines.append(("cached", f"{stats.cache_read_tokens:,}"))
+            if stats.cache_write_tokens:
+                stat_lines.append(("cache+", f"{stats.cache_write_tokens:,}"))
+            if stats.cost_usd > 0:
+                stat_lines.append(("cost", f"${stats.cost_usd:.4f}"))
 
-        available = body_end - row + 1
-        if available < 1:
+            label_attr = _cp(_SLOT_DIM)
+            value_attr = _cp(_SLOT_ACCENT)
+
+            for i, (label, value) in enumerate(stat_lines):
+                row = stats_start + i
+                if row > stats_end:
+                    break
+                self._put(row, x0, f"{label:>7} ", label_attr)
+                self._put(row, x0 + 8, value, value_attr)
+
+        # ── Event log (bottom of left panel) ──
+        log_top = stats_end + 1
+        if log_top > body_end:
+            return
+
+        self._put(log_top, x0, "EVENT LOG", _cp(_SLOT_DIM) | curses.A_BOLD)
+        log_top += 1
+        self._put(log_top, x0, "─" * min(cw, 20), _cp(_SLOT_DIM))
+        log_top += 1
+
+        log_space = body_end - log_top + 1
+        if log_space < 1:
             return
 
         with self._lock:
-            text = self._speaking_text
+            entries = list(self._event_log)
 
-        wrapped = textwrap.wrap(text, width=cw) if text else []
-
-        attr = _cp(_SLOT_SPEECH) | curses.A_BOLD if self._speaking_active else _cp(_SLOT_DIM)
-        for i in range(min(available, len(wrapped))):
-            self._put(row + i, x0, wrapped[i], attr)
+        visible = entries[-log_space:]
+        for i, (slot, text) in enumerate(visible):
+            self._put(log_top + i, x0, text[:cw], _cp(slot))
 
     def _draw_right(self, left_w: int, h: int, w: int) -> None:
         x0 = left_w + 2
@@ -357,32 +409,52 @@ class CursesTUI:
         with self._lock:
             self._right_lines.append((_SLOT_SEPARATOR, 0, "", ""))
 
+    def _end_ai_blocks(self) -> None:
+        if self._in_ai_voice_block:
+            self._add_right(_SLOT_AI_TEXT, 0, "", "")
+            self._in_ai_voice_block = False
+        if self._in_ai_text_block:
+            self._add_right(_SLOT_AI_TEXT, 0, "", "")
+            self._in_ai_text_block = False
+
     def _handle_event(self, event: DisplayEvent) -> None:
         if event.type == "speak":
-            with self._lock:
-                self._speaking_text = event.content
-                self._speaking_active = True
+            # End any prior text block before voice block
+            if self._in_ai_text_block:
+                self._add_right(_SLOT_AI_TEXT, 0, "", "")
+                self._in_ai_text_block = False
+            if not self._in_ai_voice_block:
+                self._add_right(_SLOT_SPEECH, _SLOT_AI_PREFIX, " ai-voice > ", event.content)
+                self._in_ai_voice_block = True
+            else:
+                self._add_right(_SLOT_SPEECH, _SLOT_BORDER, "          | ", event.content)
+            self._add_log(_SLOT_YELLOW, f"SPEAK  {event.content[:40]}")
         elif event.type == "text":
+            # End any prior voice block before text block
+            if self._in_ai_voice_block:
+                self._add_right(_SLOT_AI_TEXT, 0, "", "")
+                self._in_ai_voice_block = False
             lines = event.content.splitlines()
             for line in lines:
-                if not self._in_ai_block:
-                    self._add_right(_SLOT_AI_TEXT, _SLOT_AI_PREFIX, "  ai > ", line)
-                    self._in_ai_block = True
+                if not self._in_ai_text_block:
+                    self._add_right(_SLOT_AI_TEXT, _SLOT_AI_PREFIX, "  ai-text > ", line)
+                    self._in_ai_text_block = True
                 else:
-                    self._add_right(_SLOT_AI_TEXT, _SLOT_BORDER, "     | ", line)
+                    self._add_right(_SLOT_AI_TEXT, _SLOT_BORDER, "          | ", line)
+            self._add_log(_SLOT_ACCENT, f"TEXT   {event.content[:40]}")
         elif event.type == "transcript":
-            self._in_ai_block = False
+            self._end_ai_blocks()
             self._add_separator()
-            self._add_right(_SLOT_USER, _SLOT_USER_PREFIX, " you > ", event.content)
+            self._add_right(_SLOT_USER, _SLOT_USER_PREFIX, "      you > ", event.content)
+            self._add_right(_SLOT_USER, 0, "", "")
             self._exchange_count += 1
+            self._add_log(_SLOT_USER_PREFIX, f"USER   {event.content[:40]}")
         elif event.type == "status":
             msg = event.content.strip()
             if msg.startswith("[") and msg.endswith("]"):
-                self._add_right(_SLOT_DIM, 0, "       ", msg)
+                self._add_right(_SLOT_DIM, 0, "            ", msg)
             if "Listening..." in event.content or "Processing..." in event.content:
-                self._in_ai_block = False
-                with self._lock:
-                    self._speaking_active = False
+                self._end_ai_blocks()
             status_map = {
                 "Listening...": "LISTENING",
                 "Processing...": "PROCESSING",
@@ -396,12 +468,21 @@ class CursesTUI:
                 if key in event.content:
                     self._status_text = val
                     break
+            self._add_log(_SLOT_DIM, f"STATUS {msg[:40]}")
         elif event.type == "error":
-            self._add_right(_SLOT_ERROR, _SLOT_ERROR, " err > ", event.content)
+            self._add_right(_SLOT_ERROR, _SLOT_ERROR, "      err > ", event.content)
+            self._add_log(_SLOT_ERROR, f"ERROR  {event.content[:40]}")
         elif event.type == "vad":
             self._vad_active = event.content == "up"
+            self._add_log(_SLOT_GREEN if event.content == "up" else _SLOT_DIM,
+                          f"VAD    {'▲ speech' if event.content == 'up' else '▼ silence'}")
+        elif event.type == "stats":
+            if event.stats is not None:
+                self._last_stats = event.stats
+                s = event.stats
+                self._add_log(_SLOT_ACCENT, f"STATS  ttft={s.ttft_s:.2f}s in={s.input_tokens} out={s.output_tokens}")
         elif event.type == "boot":
-            self._add_right(_SLOT_ACCENT, _SLOT_DIM, "     : ", event.content)
+            self._add_log(_SLOT_ACCENT, f"BOOT   {event.content.strip()[:40]}")
 
     # ── Run loop ──────────────────────────────────────────────────────────────
 

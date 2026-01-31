@@ -48,3 +48,10 @@ def print_error(message: str) -> None:
 
 def print_vad(*, up: bool) -> None:
     _emit("vad", "up" if up else "down")
+
+
+def print_stats(stats: object) -> None:
+    from vilberta.tui import DisplayEvent
+
+    if _event_queue is not None:
+        _event_queue.put(DisplayEvent(type="stats", content="", stats=stats))  # type: ignore[arg-type]

@@ -8,7 +8,7 @@ from queue import Queue
 from openai import OpenAI, AuthenticationError
 
 from vilberta.audio_capture import record_speech, audio_to_base64_wav
-from vilberta.config import API_BASE_URL, API_KEY_ENV, MODEL_NAME
+from vilberta.config import API_BASE_URL, API_KEY_ENV, MODEL_NAME, SAMPLE_RATE
 from vilberta.interrupt_monitor import InterruptMonitor
 from vilberta.llm_service import LLMService
 from vilberta.response_parser import SectionType
@@ -20,6 +20,7 @@ from vilberta.display import (
     print_transcript,
     print_status,
     print_error,
+    print_stats,
 )
 from vilberta.sound_effects import (
     play_response_send,
@@ -28,7 +29,7 @@ from vilberta.sound_effects import (
     play_response_end,
     _SOUNDS_DIR,
 )
-from vilberta.tui import CursesTUI, DisplayEvent
+from vilberta.tui import CursesTUI, DisplayEvent, RequestStats
 
 
 _EXPECTED_SOUNDS = [
@@ -122,13 +123,15 @@ def _speak_with_monitor(tts: TTSEngine, monitor: InterruptMonitor, text: str) ->
 
 
 def _process_response(
-    llm: LLMService, tts: TTSEngine, monitor: InterruptMonitor, audio_b64: str
+    llm: LLMService, tts: TTSEngine, monitor: InterruptMonitor,
+    audio_b64: str, audio_duration_s: float,
 ) -> None:
     interrupted = False
     monitor.start()
     first_section = True
 
     play_response_send()
+    t0 = time.monotonic()
 
     try:
         for section in llm.stream_response(audio_b64):
@@ -151,6 +154,20 @@ def _process_response(
                 print_transcript(section.content)
     finally:
         monitor.stop()
+
+    total_latency = time.monotonic() - t0
+
+    # Emit stats
+    stats = RequestStats(
+        audio_duration_s=audio_duration_s,
+        input_tokens=llm.last_input_tokens,
+        output_tokens=llm.last_output_tokens,
+        cache_read_tokens=llm.last_cache_read_tokens,
+        cache_write_tokens=llm.last_cache_write_tokens,
+        ttft_s=llm.last_ttft,
+        total_latency_s=total_latency,
+    )
+    print_stats(stats)
 
     if interrupted:
         llm.mark_interrupted()
@@ -179,10 +196,11 @@ def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None
             continue
 
         print_status("Processing...")
+        audio_dur = len(audio_data) / SAMPLE_RATE
         audio_b64 = audio_to_base64_wav(audio_data)
 
         try:
-            _process_response(llm, tts, monitor, audio_b64)
+            _process_response(llm, tts, monitor, audio_b64, audio_dur)
         except Exception as e:
             print_error(f"LLM error: {e}")
 
@@ -192,9 +210,10 @@ def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None
             audio_data = record_speech(prefix_audio=prefix)
             if audio_data is not None:
                 print_status("Processing...")
+                audio_dur = len(audio_data) / SAMPLE_RATE
                 audio_b64 = audio_to_base64_wav(audio_data)
                 try:
-                    _process_response(llm, tts, monitor, audio_b64)
+                    _process_response(llm, tts, monitor, audio_b64, audio_dur)
                 except Exception as e:
                     print_error(f"LLM error: {e}")
 

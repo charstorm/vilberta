@@ -1,4 +1,5 @@
 import os
+import time
 from typing import cast, Any
 from pathlib import Path
 from collections.abc import Generator
@@ -75,24 +76,54 @@ class LLMService:
         self.system_prompt = _load_system_prompt()
         self.history = ConversationHistory()
 
+        # Metrics from last request
+        self.last_input_tokens = 0
+        self.last_output_tokens = 0
+        self.last_cache_read_tokens = 0
+        self.last_cache_write_tokens = 0
+        self.last_ttft = 0.0
+
     def stream_response(self, audio_b64: str) -> Generator[Section, None, str]:
         self.history.add_user_audio(audio_b64)
         messages = self.history.get_api_messages(self.system_prompt)
 
+        t0 = time.monotonic()
         stream = self.client.chat.completions.create(
             model=MODEL_NAME,
             messages=cast(Any, messages),
             stream=True,
+            stream_options={"include_usage": True},
             user="vilberta",
             temperature=0.7,
         )
 
         parser = StreamingParser()
         full_response = ""
+        first_token = True
+
+        # Reset metrics
+        self.last_input_tokens = 0
+        self.last_output_tokens = 0
+        self.last_cache_read_tokens = 0
+        self.last_cache_write_tokens = 0
+        self.last_ttft = 0.0
 
         for chunk in stream:
+            # Extract usage from the final chunk
+            if hasattr(chunk, "usage") and chunk.usage is not None:
+                self.last_input_tokens = getattr(chunk.usage, "prompt_tokens", 0) or 0
+                self.last_output_tokens = getattr(chunk.usage, "completion_tokens", 0) or 0
+                # OpenRouter / some providers expose cache info
+                detail = getattr(chunk.usage, "prompt_tokens_details", None)
+                if detail:
+                    self.last_cache_read_tokens = getattr(detail, "cached_tokens", 0) or 0
+                    self.last_cache_write_tokens = getattr(detail, "audio_tokens", 0) or 0
+
             delta = chunk.choices[0].delta if chunk.choices else None
             if delta and delta.content:
+                if first_token:
+                    self.last_ttft = time.monotonic() - t0
+                    first_token = False
                 text = delta.content
                 full_response += text
                 yield from parser.feed(text)
