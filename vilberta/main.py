@@ -1,14 +1,20 @@
+import os
 import sys
 import signal
 import threading
 import time
+from queue import Queue
+
+from openai import OpenAI, AuthenticationError
 
 from vilberta.audio_capture import record_speech, audio_to_base64_wav
+from vilberta.config import API_BASE_URL, API_KEY_ENV, MODEL_NAME
 from vilberta.interrupt_monitor import InterruptMonitor
 from vilberta.llm_service import LLMService
 from vilberta.response_parser import SectionType
 from vilberta.tts_engine import TTSEngine
 from vilberta.display import (
+    init_display,
     print_speak,
     print_text,
     print_transcript,
@@ -20,25 +26,84 @@ from vilberta.sound_effects import (
     play_response_received,
     play_text_start,
     play_response_end,
+    _SOUNDS_DIR,
 )
+from vilberta.tui import CursesTUI, DisplayEvent
 
 
-def _setup_signal_handler() -> threading.Event:
-    shutdown_event = threading.Event()
+_EXPECTED_SOUNDS = [
+    "response_send.wav",
+    "response_received.wav",
+    "text_start.wav",
+    "text_end.wav",
+    "line_print.wav",
+    "response_end.wav",
+]
 
-    def handler(sig: int, frame: object) -> None:
-        print_status("\nShutting down...")
-        shutdown_event.set()
-        sys.exit(0)
 
-    signal.signal(signal.SIGINT, handler)
-    signal.signal(signal.SIGTERM, handler)
-    return shutdown_event
+# ── Preflight (runs BEFORE curses, uses plain print via fallback) ────────────
+
+
+def _run_preflight_checks() -> None:
+    print("Running preflight checks...")
+
+    api_key = os.environ.get(API_KEY_ENV, "")
+    if not api_key:
+        print(f"ERROR: Environment variable {API_KEY_ENV} is not set.")
+        sys.exit(1)
+
+    try:
+        client = OpenAI(base_url=API_BASE_URL, api_key=api_key)
+        client.models.list()
+        print("  ✓ API key valid")
+    except AuthenticationError:
+        print(f"ERROR: API key in {API_KEY_ENV} is invalid.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"  ⚠ Could not verify API key ({e}), continuing anyway")
+
+    missing = [
+        f for f in _EXPECTED_SOUNDS if not os.path.isfile(os.path.join(_SOUNDS_DIR, f))
+    ]
+    if missing:
+        print("  Generating missing sound files...")
+        from vilberta.generate_sounds import main as generate_sounds
+
+        generate_sounds()
+        print("  ✓ Sound files generated")
+    else:
+        print("  ✓ Sound files OK")
+
+    print("Preflight checks passed.\n")
+
+
+# ── Boot sequence (runs inside curses via queue) ─────────────────────────────
+
+_BOOT_LINES = [
+    ("[ OK ] Neural link", "ONLINE"),
+    ("[ OK ] Voice matrix", "ONLINE"),
+    ("[ OK ] Audio subsystem", "ONLINE"),
+    (f"[ OK ] Model: {MODEL_NAME}", "LINKED"),
+    ("[ OK ] System", "READY"),
+]
+
+
+def _play_boot_sequence(queue: Queue[DisplayEvent]) -> None:
+    for label, status in _BOOT_LINES:
+        dots = "." * (42 - len(label) - len(status))
+        queue.put(DisplayEvent(type="boot", content=f"  {label} {dots} {status}"))
+        time.sleep(0.25)
+    queue.put(DisplayEvent(type="boot", content=""))
+    queue.put(DisplayEvent(type="boot", content="  ═══ All systems nominal ═══"))
+    queue.put(DisplayEvent(type="boot", content=""))
+    time.sleep(0.5)
+
+
+# ── Core voice loop (unchanged logic) ────────────────────────────────────────
 
 
 def _speak_with_monitor(tts: TTSEngine, monitor: InterruptMonitor, text: str) -> bool:
     """Speak text while monitoring for interrupts. Returns True if completed."""
-    # Poll monitor in a background thread to trigger TTS interrupt
     stop_poll = threading.Event()
 
     def _poll() -> None:
@@ -94,8 +159,9 @@ def _process_response(
         play_response_end()
 
 
-def main() -> None:
-    shutdown_event = _setup_signal_handler()
+def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None:
+    """Worker thread: init services, run voice loop."""
+    _play_boot_sequence(queue)
 
     print_status("Loading TTS model...")
     tts = TTSEngine()
@@ -103,7 +169,7 @@ def main() -> None:
 
     print_status("Initializing LLM service...")
     llm = LLMService()
-    print_status("Ready. Listening...\n")
+    print_status("Ready. Listening...")
 
     monitor = InterruptMonitor()
 
@@ -120,8 +186,6 @@ def main() -> None:
         except Exception as e:
             print_error(f"LLM error: {e}")
 
-        # If monitor was triggered, the user started speaking —
-        # continue recording with the buffered audio prefix
         prefix = monitor.buffered_audio if monitor.triggered else None
         if prefix is not None:
             print_status("Continuing recording...")
@@ -134,8 +198,35 @@ def main() -> None:
                 except Exception as e:
                     print_error(f"LLM error: {e}")
 
-        print()
-        print_status("Listening...\n")
+        print_status("Listening...")
+
+
+# ── Entry point ──────────────────────────────────────────────────────────────
+
+
+def main() -> None:
+    _run_preflight_checks()
+
+    event_queue: Queue[DisplayEvent] = Queue()
+    init_display(event_queue)
+
+    shutdown_event = threading.Event()
+
+    def _sighandler(sig: int, frame: object) -> None:
+        shutdown_event.set()
+
+    signal.signal(signal.SIGINT, _sighandler)
+    signal.signal(signal.SIGTERM, _sighandler)
+
+    tui = CursesTUI()
+
+    worker_thread = threading.Thread(
+        target=_worker, args=(event_queue, shutdown_event), daemon=True
+    )
+    worker_thread.start()
+
+    # TUI runs on main thread (curses requirement)
+    tui.run(event_queue, shutdown_event)
 
 
 if __name__ == "__main__":
