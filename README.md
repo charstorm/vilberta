@@ -16,45 +16,6 @@ An interactive voice assistant powered by LLMs, featuring real-time speech-to-te
 - **Persistent Conversation**: Maintains history across interactions
 - **Rich Terminal Interface**: Colored output with status indicators and progress bars
 
-## Architecture
-```
-vilberta/
-├── __init__.py             # Package initialization
-├── main.py                 # Main event loop and orchestration
-├── config.py               # Configuration constants and defaults
-├── audio_capture.py        # VAD-based speech recording with PyAudio
-├── llm_service.py          # OpenAI API integration with conversation management
-├── tts_engine.py           # Text-to-speech using pocket-tts
-├── interrupt_monitor.py    # Real-time interruption detection during TTS
-├── display.py              # ANSI-colored terminal output and formatting
-├── sound_effects.py        # Audio feedback system with WAV files
-├── response_parser.py      # Parses tagged LLM response structures
-├── text_section_splitter.py # Utilities for streaming text processing
-├── generate_sounds.py      # Script to generate custom sound effects
-└── prompts/
-    └── system.md           # System prompt defining assistant behavior
-```
-├── main.py                 # Main event loop and orchestration
-├── audio_capture.py        # VAD-based speech recording
-├── llm_service.py         # LLM API integration with conversation history
-├── tts_engine.py          # Text-to-speech using pocket-tts
-├── interrupt_monitor.py   # Detects user interruptions during TTS
-├── display.py             # Terminal output with ANSI colors
-├── sound_effects.py       # Audio feedback system
-├── response_parser.py     # Parses LLM tagged responses
-├── text_section_splitter.py  # Streaming text parser utility
-├── config.py              # Configuration constants
-├── generate_sounds.py     # Generates sound effect WAV files
-└── prompts/system.md      # System prompt for the LLM
-```
-
-## Requirements
-
-- Python 3.10 or higher
-- Working microphone
-- OpenRouter API key for LLM access (set as `OPENAI_API_KEY`)
-- Audio output device (speakers/headphones)
-
 ## Installation
 
 1. Clone the repository:
