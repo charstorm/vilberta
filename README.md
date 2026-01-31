@@ -37,9 +37,8 @@ pip install -r requirements.txt
 
 4. Set your OpenRouter API key:
 ```bash
-export OPENAI_API_KEY="your-openrouter-api-key"
+export OPENROUTER_API_KEY="your-openrouter-api-key"
 ```
-Alternatively, create a `.env` file in the project root with `OPENAI_API_KEY=your-key-here`.
 
 ## Usage
 
@@ -49,33 +48,12 @@ Start the voice assistant:
 python -m vilberta
 ```
 
-Or if installed as a package:
-
-```bash
-vilberta
-```
-
 The system will:
 1. Initialize audio components and LLM service
 2. Display a ready prompt
 3. Begin listening for voice input
 
 Speak naturally and the assistant will respond both audibly and visually. Press `Ctrl+C` to exit at any time.
-
-### Command Line Options
-
-- `--model MODEL`: Override default LLM model
-- `--voice VOICE`: Set TTS voice (default: alba)
-- `--speed FACTOR`: Adjust TTS speed (default: 1.0)
-- `--help`: Show all options
-
-The assistant will:
-1. Load the TTS model
-2. Initialize the LLM service
-3. Start listening for your voice
-4. Process your speech and respond
-
-Press `Ctrl+C` to exit gracefully.
 
 ## How It Works
 
@@ -96,44 +74,6 @@ If you speak during TTS playback:
 - The TTS immediately stops
 - The buffered audio is prepended to the next recording
 - The conversation continues naturally
-
-### Configuration
-
-Key settings in `vilberta/config.py`:
-
-- `API_BASE_URL`: LLM API endpoint (default: OpenRouter)
-- `MODEL_NAME`: LLM model to use (default: google/gemini-flash-1.5)
-- `SAMPLE_RATE`: Audio sample rate (16kHz)
-- `VAD_THRESHOLD`: Speech detection sensitivity (0.5 = medium)
-- `TTS_VOICE`: Voice for TTS (default: alba)
-- `TTS_SPEED_FACTOR`: Speech speed multiplier (1.0 = normal)
-
-See `config.py` for all available settings.
-
-## Dependencies
-
-Main runtime dependencies:
-- `torch`/`torchaudio`: Machine learning framework with CPU support
-- `scipy`: Scientific computing for audio processing
-- `openai`: API client for LLM services
-- `pocket-tts`: Local text-to-speech engine
-- `pysilero-vad`: Voice activity detection
-- `sounddevice`: Audio input/output
-
-See `requirements.txt` for specific versions and additional dev dependencies.
-
-## Contributing
-
-We welcome contributions! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly (including edge cases)
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see the `LICENSE` file for details.
 
 ## Acknowledgments
 
