@@ -123,8 +123,11 @@ def _speak_with_monitor(tts: TTSEngine, monitor: InterruptMonitor, text: str) ->
 
 
 def _process_response(
-    llm: LLMService, tts: TTSEngine, monitor: InterruptMonitor,
-    audio_b64: str, audio_duration_s: float,
+    llm: LLMService,
+    tts: TTSEngine,
+    monitor: InterruptMonitor,
+    audio_b64: str,
+    audio_duration_s: float,
 ) -> None:
     interrupted = False
     monitor.start()

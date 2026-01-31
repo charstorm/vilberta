@@ -112,12 +112,18 @@ class LLMService:
             # Extract usage from the final chunk
             if hasattr(chunk, "usage") and chunk.usage is not None:
                 self.last_input_tokens = getattr(chunk.usage, "prompt_tokens", 0) or 0
-                self.last_output_tokens = getattr(chunk.usage, "completion_tokens", 0) or 0
+                self.last_output_tokens = (
+                    getattr(chunk.usage, "completion_tokens", 0) or 0
+                )
                 # OpenRouter / some providers expose cache info
                 detail = getattr(chunk.usage, "prompt_tokens_details", None)
                 if detail:
-                    self.last_cache_read_tokens = getattr(detail, "cached_tokens", 0) or 0
-                    self.last_cache_write_tokens = getattr(detail, "audio_tokens", 0) or 0
+                    self.last_cache_read_tokens = (
+                        getattr(detail, "cached_tokens", 0) or 0
+                    )
+                    self.last_cache_write_tokens = (
+                        getattr(detail, "audio_tokens", 0) or 0
+                    )
 
             delta = chunk.choices[0].delta if chunk.choices else None
             if delta and delta.content:

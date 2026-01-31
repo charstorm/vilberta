@@ -1,9 +1,14 @@
 import numpy as np
-import sounddevice as sd
 from scipy import signal as scipy_signal
-from pocket_tts import TTSModel
+import sounddevice as sd
 
-from vilberta.config import TTS_VOICE, TTS_SPEED_FACTOR
+import torch
+
+torch.backends.nnpack.enabled = False  # type: ignore[attr-defined]  # noqa: E402
+
+from pocket_tts import TTSModel  # noqa: E402
+
+from vilberta.config import TTS_VOICE, TTS_SPEED_FACTOR  # noqa: E402
 
 FADE_SAMPLES = 64
 

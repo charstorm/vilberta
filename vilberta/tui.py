@@ -20,9 +20,10 @@ class RequestStats:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
-    ttft_s: float = 0.0       # time to first token
+    ttft_s: float = 0.0  # time to first token
     total_latency_s: float = 0.0
     cost_usd: float = 0.0
+
 
 # Ensure the locale supports UTF-8 box-drawing characters.
 locale.setlocale(locale.LC_ALL, "")
@@ -30,7 +31,9 @@ locale.setlocale(locale.LC_ALL, "")
 
 @dataclass
 class DisplayEvent:
-    type: str  # "speak", "text", "transcript", "status", "error", "vad", "boot", "stats"
+    type: (
+        str  # "speak", "text", "transcript", "status", "error", "vad", "boot", "stats"
+    )
     content: str
     stats: RequestStats | None = None
 
@@ -54,35 +57,35 @@ _SLOT_USER_PREFIX = 12
 _SLOT_SEPARATOR = 13
 
 _PALETTE_256: dict[int, tuple[int, int]] = {
-    _SLOT_BORDER:      (243, -1),
-    _SLOT_SPEECH:      (255, -1),
-    _SLOT_AI_TEXT:     (253, -1),
-    _SLOT_ERROR:       (167, -1),
-    _SLOT_USER:        (249, -1),
-    _SLOT_GREEN:       (108, -1),
-    _SLOT_ACCENT:      (110, -1),
-    _SLOT_STATUSBAR:   (249, 236),
-    _SLOT_YELLOW:      (179, -1),
-    _SLOT_DIM:         (243, -1),
-    _SLOT_AI_PREFIX:   (110, -1),
+    _SLOT_BORDER: (243, -1),
+    _SLOT_SPEECH: (255, -1),
+    _SLOT_AI_TEXT: (253, -1),
+    _SLOT_ERROR: (167, -1),
+    _SLOT_USER: (249, -1),
+    _SLOT_GREEN: (108, -1),
+    _SLOT_ACCENT: (110, -1),
+    _SLOT_STATUSBAR: (249, 236),
+    _SLOT_YELLOW: (179, -1),
+    _SLOT_DIM: (243, -1),
+    _SLOT_AI_PREFIX: (110, -1),
     _SLOT_USER_PREFIX: (179, -1),
-    _SLOT_SEPARATOR:   (237, -1),
+    _SLOT_SEPARATOR: (237, -1),
 }
 
 _PALETTE_16: dict[int, tuple[int, int]] = {
-    _SLOT_BORDER:      (curses.COLOR_WHITE,   -1),
-    _SLOT_SPEECH:      (curses.COLOR_WHITE,   -1),
-    _SLOT_AI_TEXT:     (curses.COLOR_WHITE,   -1),
-    _SLOT_ERROR:       (curses.COLOR_RED,     -1),
-    _SLOT_USER:        (curses.COLOR_WHITE,   -1),
-    _SLOT_GREEN:       (curses.COLOR_GREEN,   -1),
-    _SLOT_ACCENT:      (curses.COLOR_CYAN,    -1),
-    _SLOT_STATUSBAR:   (curses.COLOR_WHITE,   curses.COLOR_BLACK),
-    _SLOT_YELLOW:      (curses.COLOR_YELLOW,  -1),
-    _SLOT_DIM:         (curses.COLOR_WHITE,   -1),
-    _SLOT_AI_PREFIX:   (curses.COLOR_CYAN,    -1),
-    _SLOT_USER_PREFIX: (curses.COLOR_YELLOW,  -1),
-    _SLOT_SEPARATOR:   (curses.COLOR_BLACK,   -1),
+    _SLOT_BORDER: (curses.COLOR_WHITE, -1),
+    _SLOT_SPEECH: (curses.COLOR_WHITE, -1),
+    _SLOT_AI_TEXT: (curses.COLOR_WHITE, -1),
+    _SLOT_ERROR: (curses.COLOR_RED, -1),
+    _SLOT_USER: (curses.COLOR_WHITE, -1),
+    _SLOT_GREEN: (curses.COLOR_GREEN, -1),
+    _SLOT_ACCENT: (curses.COLOR_CYAN, -1),
+    _SLOT_STATUSBAR: (curses.COLOR_WHITE, curses.COLOR_BLACK),
+    _SLOT_YELLOW: (curses.COLOR_YELLOW, -1),
+    _SLOT_DIM: (curses.COLOR_WHITE, -1),
+    _SLOT_AI_PREFIX: (curses.COLOR_CYAN, -1),
+    _SLOT_USER_PREFIX: (curses.COLOR_YELLOW, -1),
+    _SLOT_SEPARATOR: (curses.COLOR_BLACK, -1),
 }
 
 
@@ -248,7 +251,7 @@ class CursesTUI:
         with self._lock:
             self._event_log.append((slot, text))
             if len(self._event_log) > self._EVENT_LOG_MAX:
-                self._event_log = self._event_log[-self._EVENT_LOG_MAX:]
+                self._event_log = self._event_log[-self._EVENT_LOG_MAX :]
 
     def _draw_left(self, left_w: int, h: int) -> None:
         x0 = 2
@@ -270,10 +273,10 @@ class CursesTUI:
         stats = self._last_stats
         if stats is not None:
             stat_lines = [
-                ("audio",   f"{stats.audio_duration_s:.1f}s"),
-                ("ttft",    f"{stats.ttft_s:.2f}s"),
+                ("audio", f"{stats.audio_duration_s:.1f}s"),
+                ("ttft", f"{stats.ttft_s:.2f}s"),
                 ("latency", f"{stats.total_latency_s:.2f}s"),
-                ("in tok",  f"{stats.input_tokens:,}"),
+                ("in tok", f"{stats.input_tokens:,}"),
                 ("out tok", f"{stats.output_tokens:,}"),
             ]
             if stats.cache_read_tokens:
@@ -357,7 +360,12 @@ class CursesTUI:
         # Empty state
         if not display_lines:
             msg = "Waiting for conversation..."
-            self._put(body_top + conv_height // 2, x0 + (cw - len(msg)) // 2, msg, _cp(_SLOT_DIM))
+            self._put(
+                body_top + conv_height // 2,
+                x0 + (cw - len(msg)) // 2,
+                msg,
+                _cp(_SLOT_DIM),
+            )
             return
 
         total = len(display_lines)
@@ -367,7 +375,9 @@ class CursesTUI:
         for i, (text_slot, prefix, prefix_slot, txt) in enumerate(visible):
             r = body_top + i
             if prefix:
-                self._put(r, x0, prefix, _cp(prefix_slot) if prefix_slot else _cp(text_slot))
+                self._put(
+                    r, x0, prefix, _cp(prefix_slot) if prefix_slot else _cp(text_slot)
+                )
             self._put(r, x0 + len(prefix), txt, _cp(text_slot))
 
         # Scrollbar
@@ -401,7 +411,9 @@ class CursesTUI:
 
     # ── Events ────────────────────────────────────────────────────────────────
 
-    def _add_right(self, text_slot: int, prefix_slot: int, prefix: str, text: str) -> None:
+    def _add_right(
+        self, text_slot: int, prefix_slot: int, prefix: str, text: str
+    ) -> None:
         with self._lock:
             self._right_lines.append((text_slot, prefix_slot, prefix, text))
 
@@ -424,10 +436,14 @@ class CursesTUI:
                 self._add_right(_SLOT_AI_TEXT, 0, "", "")
                 self._in_ai_text_block = False
             if not self._in_ai_voice_block:
-                self._add_right(_SLOT_SPEECH, _SLOT_AI_PREFIX, " ai-voice > ", event.content)
+                self._add_right(
+                    _SLOT_SPEECH, _SLOT_AI_PREFIX, " ai-voice > ", event.content
+                )
                 self._in_ai_voice_block = True
             else:
-                self._add_right(_SLOT_SPEECH, _SLOT_BORDER, "          | ", event.content)
+                self._add_right(
+                    _SLOT_SPEECH, _SLOT_BORDER, "          | ", event.content
+                )
             self._add_log(_SLOT_YELLOW, f"SPEAK  {event.content[:40]}")
         elif event.type == "text":
             # End any prior voice block before text block
@@ -437,7 +453,9 @@ class CursesTUI:
             lines = event.content.splitlines()
             for line in lines:
                 if not self._in_ai_text_block:
-                    self._add_right(_SLOT_AI_TEXT, _SLOT_AI_PREFIX, "  ai-text > ", line)
+                    self._add_right(
+                        _SLOT_AI_TEXT, _SLOT_AI_PREFIX, "  ai-text > ", line
+                    )
                     self._in_ai_text_block = True
                 else:
                     self._add_right(_SLOT_AI_TEXT, _SLOT_BORDER, "          | ", line)
@@ -445,7 +463,9 @@ class CursesTUI:
         elif event.type == "transcript":
             self._end_ai_blocks()
             self._add_separator()
-            self._add_right(_SLOT_USER, _SLOT_USER_PREFIX, "      you > ", event.content)
+            self._add_right(
+                _SLOT_USER, _SLOT_USER_PREFIX, "      you > ", event.content
+            )
             self._add_right(_SLOT_USER, 0, "", "")
             self._exchange_count += 1
             self._add_log(_SLOT_USER_PREFIX, f"USER   {event.content[:40]}")
@@ -474,13 +494,18 @@ class CursesTUI:
             self._add_log(_SLOT_ERROR, f"ERROR  {event.content[:40]}")
         elif event.type == "vad":
             self._vad_active = event.content == "up"
-            self._add_log(_SLOT_GREEN if event.content == "up" else _SLOT_DIM,
-                          f"VAD    {'▲ speech' if event.content == 'up' else '▼ silence'}")
+            self._add_log(
+                _SLOT_GREEN if event.content == "up" else _SLOT_DIM,
+                f"VAD    {'▲ speech' if event.content == 'up' else '▼ silence'}",
+            )
         elif event.type == "stats":
             if event.stats is not None:
                 self._last_stats = event.stats
                 s = event.stats
-                self._add_log(_SLOT_ACCENT, f"STATS  ttft={s.ttft_s:.2f}s in={s.input_tokens} out={s.output_tokens}")
+                self._add_log(
+                    _SLOT_ACCENT,
+                    f"STATS  ttft={s.ttft_s:.2f}s in={s.input_tokens} out={s.output_tokens}",
+                )
         elif event.type == "boot":
             self._add_log(_SLOT_ACCENT, f"BOOT   {event.content.strip()[:40]}")
 

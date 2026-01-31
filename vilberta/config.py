@@ -9,7 +9,7 @@ from numpy.typing import NDArray
 API_BASE_URL = "https://openrouter.ai/api/v1"
 MODEL_NAME = "google/gemini-2.5-flash"
 # MODEL_NAME = "openai/gpt-audio-mini"
-API_KEY_ENV = "OPENAI_API_KEY"
+API_KEY_ENV = "OPENROUTER_API_KEY"
 
 # --- Audio ---
 SAMPLE_RATE = 16000
