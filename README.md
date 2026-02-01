@@ -2,6 +2,8 @@
 
 An interactive voice assistant powered by LLMs, featuring real-time speech-to-text, streaming text-to-speech, intelligent interruption handling, and multimodal output modes.
 
+<img src="docs/screenshot.png" alt="Alt text" width="600">
+
 ## Features
 
 - **Real-time Voice Interaction**: Bidirectional audio communication with low-latency processing
@@ -20,7 +22,7 @@ An interactive voice assistant powered by LLMs, featuring real-time speech-to-te
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/anomalyco/vilberta.git
+git clone https://github.com/charstorm/vilberta.git
 cd vilberta
 ```
 
@@ -39,6 +41,8 @@ pip install -r requirements.txt
 ```bash
 export OPENROUTER_API_KEY="your-openrouter-api-key"
 ```
+
+See `vilberta/config.py` if you want to change more.
 
 ## Usage
 
