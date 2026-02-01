@@ -90,6 +90,18 @@ def generate_line_print() -> None:
     _save_wav("line_print.wav", audio * env)
 
 
+def generate_ready() -> None:
+    dur = 0.08
+    n = int(SAMPLE_RATE * dur)
+    t = np.linspace(0, dur, n, dtype=np.float32)
+    env = _envelope(n, attack=n // 6, decay=n // 3)
+    t1 = np.sin(2 * np.pi * 880 * t) * env
+    t2 = np.sin(2 * np.pi * 1320 * t) * env
+    gap = np.zeros(int(SAMPLE_RATE * 0.03), dtype=np.float32)
+    audio = np.concatenate([t1, gap, t2]).astype(np.float32) * 0.35
+    _save_wav("ready.wav", audio)
+
+
 def generate_response_end() -> None:
     dur = 0.05
     n = int(SAMPLE_RATE * dur)
@@ -111,6 +123,7 @@ def main() -> None:
     generate_text_end()
     generate_line_print()
     generate_response_end()
+    generate_ready()
     print("Done.")
 
 

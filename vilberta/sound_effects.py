@@ -51,3 +51,7 @@ def play_line_print() -> None:
 
 def play_response_end() -> None:
     _play("response_end.wav")
+
+
+def play_ready() -> None:
+    _play("ready.wav")

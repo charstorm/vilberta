@@ -27,6 +27,7 @@ from vilberta.sound_effects import (
     play_response_received,
     play_text_start,
     play_response_end,
+    play_ready,
     _SOUNDS_DIR,
 )
 from vilberta.tui import CursesTUI, DisplayEvent, RequestStats
@@ -39,6 +40,7 @@ _EXPECTED_SOUNDS = [
     "text_end.wav",
     "line_print.wav",
     "response_end.wav",
+    "ready.wav",
 ]
 
 
@@ -190,6 +192,7 @@ def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None
     print_status("Initializing LLM service...")
     llm = LLMService()
     print_status("Ready. Listening...")
+    play_ready()
 
     monitor = InterruptMonitor()
 
