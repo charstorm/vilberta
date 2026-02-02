@@ -1,14 +1,20 @@
-"""Curses-based split-panel TUI for vilberta."""
+"""Futuristic Textual-based TUI for vilberta with animations."""
 
 from __future__ import annotations
 
-import curses
-import locale
-import textwrap
 import threading
-import time
+from collections import deque
 from dataclasses import dataclass
 from queue import Queue, Empty
+from typing import Any
+
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, Vertical, Container
+from textual.widgets import Static, RichLog, Footer
+from textual.reactive import reactive
+from rich.text import Text
+from rich.console import Group
+from rich.table import Table
 
 from vilberta.config import MODEL_NAME, TTS_VOICE, SAMPLE_RATE
 
@@ -20,461 +26,422 @@ class RequestStats:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
-    ttft_s: float = 0.0  # time to first token
+    ttft_s: float = 0.0
     total_latency_s: float = 0.0
     cost_usd: float = 0.0
 
 
-# Ensure the locale supports UTF-8 box-drawing characters.
-locale.setlocale(locale.LC_ALL, "")
-
-
 @dataclass
 class DisplayEvent:
-    type: (
-        str  # "speak", "text", "transcript", "status", "error", "vad", "boot", "stats"
-    )
+    type: str
     content: str
     stats: RequestStats | None = None
 
 
-# ── Color palette ────────────────────────────────────────────────────────────
-# We define two palettes: one for 256-color terminals and a fallback for basic
-# 16-color terminals.  Each palette maps a logical slot to (fg, bg).
+class WaveformWidget(Static):
+    """Animated waveform visualization."""
 
-_SLOT_BORDER = 1
-_SLOT_SPEECH = 2
-_SLOT_AI_TEXT = 3
-_SLOT_ERROR = 4
-_SLOT_USER = 5
-_SLOT_GREEN = 6
-_SLOT_ACCENT = 7
-_SLOT_STATUSBAR = 8
-_SLOT_YELLOW = 9
-_SLOT_DIM = 10
-_SLOT_AI_PREFIX = 11
-_SLOT_USER_PREFIX = 12
-_SLOT_SEPARATOR = 13
+    vad_active = reactive(False)
+    frame = reactive(0)
 
-_PALETTE_256: dict[int, tuple[int, int]] = {
-    _SLOT_BORDER: (243, -1),
-    _SLOT_SPEECH: (255, -1),
-    _SLOT_AI_TEXT: (253, -1),
-    _SLOT_ERROR: (167, -1),
-    _SLOT_USER: (249, -1),
-    _SLOT_GREEN: (108, -1),
-    _SLOT_ACCENT: (110, -1),
-    _SLOT_STATUSBAR: (249, 236),
-    _SLOT_YELLOW: (179, -1),
-    _SLOT_DIM: (243, -1),
-    _SLOT_AI_PREFIX: (110, -1),
-    _SLOT_USER_PREFIX: (179, -1),
-    _SLOT_SEPARATOR: (237, -1),
-}
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.waveform_data: deque[float] = deque([0.0] * 40, maxlen=40)
 
-_PALETTE_16: dict[int, tuple[int, int]] = {
-    _SLOT_BORDER: (curses.COLOR_WHITE, -1),
-    _SLOT_SPEECH: (curses.COLOR_WHITE, -1),
-    _SLOT_AI_TEXT: (curses.COLOR_WHITE, -1),
-    _SLOT_ERROR: (curses.COLOR_RED, -1),
-    _SLOT_USER: (curses.COLOR_WHITE, -1),
-    _SLOT_GREEN: (curses.COLOR_GREEN, -1),
-    _SLOT_ACCENT: (curses.COLOR_CYAN, -1),
-    _SLOT_STATUSBAR: (curses.COLOR_WHITE, curses.COLOR_BLACK),
-    _SLOT_YELLOW: (curses.COLOR_YELLOW, -1),
-    _SLOT_DIM: (curses.COLOR_WHITE, -1),
-    _SLOT_AI_PREFIX: (curses.COLOR_CYAN, -1),
-    _SLOT_USER_PREFIX: (curses.COLOR_YELLOW, -1),
-    _SLOT_SEPARATOR: (curses.COLOR_BLACK, -1),
-}
+    def on_mount(self) -> None:
+        self.set_interval(1 / 30, self.update_waveform)
 
+    def update_waveform(self) -> None:
+        import math
 
-def _init_palette() -> None:
-    palette = _PALETTE_256 if curses.COLORS >= 256 else _PALETTE_16
-    for slot, (fg, bg) in palette.items():
-        curses.init_pair(slot, fg, bg)
+        self.frame += 1
 
-
-def _cp(slot: int) -> int:
-    return curses.color_pair(slot)
-
-
-class CursesTUI:
-    def __init__(self) -> None:
-        self._stdscr: curses.window | None = None
-        self._lock = threading.Lock()
-
-        # Left panel — event log (slot, text), max 20 entries
-        self._event_log: list[tuple[int, str]] = []
-        self._EVENT_LOG_MAX = 20
-
-        # Right panel — conversation log
-        # Each entry: (color_pair_slot, prefix_slot, prefix, text)
-        self._right_lines: list[tuple[int, int, str, str]] = []
-
-        # Status
-        self._status_text = "INITIALIZING"
-        self._vad_active = False
-        self._exchange_count = 0
-
-        # Track whether we're inside an AI voice/text block
-        self._in_ai_voice_block = False
-        self._in_ai_text_block = False
-
-        # Last request stats
-        self._last_stats: RequestStats | None = None
-
-    def _init_curses(self) -> curses.window:
-        stdscr = curses.initscr()
-        curses.noecho()
-        curses.cbreak()
-        curses.curs_set(0)
-        stdscr.keypad(True)
-        stdscr.nodelay(True)
-
-        if curses.has_colors():
-            curses.start_color()
-            curses.use_default_colors()
-            _init_palette()
-
-        self._stdscr = stdscr
-        return stdscr
-
-    def _dims(self) -> tuple[int, int]:
-        assert self._stdscr is not None
-        return self._stdscr.getmaxyx()
-
-    def _put(self, row: int, col: int, text: str, attr: int = 0) -> None:
-        scr = self._stdscr
-        assert scr is not None
-        h, w = self._dims()
-        if row < 0 or row >= h or col >= w:
-            return
-        try:
-            scr.addnstr(row, col, text, w - col, attr)
-        except curses.error:
-            pass
-
-    def _hline(self, row: int, col: int, length: int, attr: int) -> None:
-        scr = self._stdscr
-        assert scr is not None
-        h, w = self._dims()
-        if row < 0 or row >= h:
-            return
-        n = min(length, w - col)
-        if n <= 0:
-            return
-        try:
-            scr.hline(row, col, curses.ACS_HLINE | attr, n)
-        except curses.error:
-            pass
-
-    def _vline(self, col: int, row_start: int, row_end: int, attr: int) -> None:
-        scr = self._stdscr
-        assert scr is not None
-        h, w = self._dims()
-        if col < 0 or col >= w:
-            return
-        for r in range(max(0, row_start), min(row_end, h)):
-            try:
-                scr.addch(r, col, curses.ACS_VLINE, attr)
-            except curses.error:
-                pass
-
-    def _addch(self, row: int, col: int, ch: int, attr: int = 0) -> None:
-        scr = self._stdscr
-        assert scr is not None
-        h, w = self._dims()
-        if row < 0 or row >= h or col < 0 or col >= w:
-            return
-        try:
-            scr.addch(row, col, ch, attr)
-        except curses.error:
-            pass
-
-    # ── Layout ────────────────────────────────────────────────────────────────
-
-    def _draw(self) -> None:
-        scr = self._stdscr
-        assert scr is not None
-        h, w = self._dims()
-        if h < 6 or w < 40:
-            return
-
-        scr.erase()
-
-        left_w = max(w * 2 // 5, 26)
-        if left_w > w - 22:
-            left_w = w // 2
-
-        ba = _cp(_SLOT_BORDER)  # border attr
-
-        # ── Outer border (ACS line-drawing — works on any terminal) ──
-        self._addch(0, 0, curses.ACS_ULCORNER, ba)
-        self._addch(0, w - 1, curses.ACS_URCORNER, ba)
-        self._addch(h - 1, 0, curses.ACS_LLCORNER, ba)
-        self._addch(h - 1, w - 1, curses.ACS_LRCORNER, ba)
-        self._hline(0, 1, w - 2, ba)
-        self._hline(h - 1, 1, w - 2, ba)
-        self._vline(0, 1, h - 1, ba)
-        self._vline(w - 1, 1, h - 1, ba)
-
-        # ── Title in top border ──
-        self._put(0, 3, " vilberta ", _cp(_SLOT_ACCENT) | curses.A_BOLD)
-
-        # ── Vertical divider ──
-        div = left_w
-        self._addch(0, div, curses.ACS_TTEE, ba)
-        self._vline(div, 1, h - 3, ba)
-
-        # ── Status separator ──
-        ss = h - 3
-        self._addch(ss, 0, curses.ACS_LTEE, ba)
-        self._hline(ss, 1, div - 1, ba)
-        self._addch(ss, div, curses.ACS_BTEE, ba)
-        self._hline(ss, div + 1, w - div - 2, ba)
-        self._addch(ss, w - 1, curses.ACS_RTEE, ba)
-
-        # ── Shared header separator at row 3 ──
-        self._addch(3, 0, curses.ACS_LTEE, ba)
-        self._hline(3, 1, div - 1, ba)
-        self._addch(3, div, curses.ACS_PLUS, ba)
-        self._hline(3, div + 1, w - div - 2, ba)
-        self._addch(3, w - 1, curses.ACS_RTEE, ba)
-
-        self._draw_left(left_w, h)
-        self._draw_right(left_w, h, w)
-        self._draw_status(h, w)
-        scr.refresh()
-
-    def _add_log(self, slot: int, text: str) -> None:
-        with self._lock:
-            self._event_log.append((slot, text))
-            if len(self._event_log) > self._EVENT_LOG_MAX:
-                self._event_log = self._event_log[-self._EVENT_LOG_MAX :]
-
-    def _draw_left(self, left_w: int, h: int) -> None:
-        x0 = 2
-        cw = left_w - x0 - 1
-        if cw < 10:
-            return
-
-        body_end = h - 4
-
-        # ── Header: model + voice (2 rows) ──
-        self._put(1, x0, MODEL_NAME, _cp(_SLOT_ACCENT))
-        self._put(2, x0, f"{TTS_VOICE}  {SAMPLE_RATE // 1000}kHz", _cp(_SLOT_DIM))
-
-        # Separator at row 3 drawn by _draw()
-
-        # ── Stats section (fixed area rows 4–12) ──
-        stats_start = 4
-        stats_end = min(12, body_end)  # up to 9 rows for stats
-        stats = self._last_stats
-        if stats is not None:
-            stat_lines = [
-                ("audio", f"{stats.audio_duration_s:.1f}s"),
-                ("ttft", f"{stats.ttft_s:.2f}s"),
-                ("latency", f"{stats.total_latency_s:.2f}s"),
-                ("in tok", f"{stats.input_tokens:,}"),
-                ("out tok", f"{stats.output_tokens:,}"),
-            ]
-            if stats.cache_read_tokens:
-                stat_lines.append(("cached", f"{stats.cache_read_tokens:,}"))
-            if stats.cache_write_tokens:
-                stat_lines.append(("cache+", f"{stats.cache_write_tokens:,}"))
-            if stats.cost_usd > 0:
-                stat_lines.append(("cost", f"${stats.cost_usd:.4f}"))
-
-            label_attr = _cp(_SLOT_DIM)
-            value_attr = _cp(_SLOT_ACCENT)
-
-            for i, (label, value) in enumerate(stat_lines):
-                row = stats_start + i
-                if row > stats_end:
-                    break
-                self._put(row, x0, f"{label:>7} ", label_attr)
-                self._put(row, x0 + 8, value, value_attr)
-
-        # ── Event log (bottom of left panel) ──
-        log_top = stats_end + 1
-        if log_top > body_end:
-            return
-
-        self._put(log_top, x0, "EVENT LOG", _cp(_SLOT_DIM) | curses.A_BOLD)
-        log_top += 1
-        self._put(log_top, x0, "─" * min(cw, 20), _cp(_SLOT_DIM))
-        log_top += 1
-
-        log_space = body_end - log_top + 1
-        if log_space < 1:
-            return
-
-        with self._lock:
-            entries = list(self._event_log)
-
-        visible = entries[-log_space:]
-        for i, (slot, text) in enumerate(visible):
-            self._put(log_top + i, x0, text[:cw], _cp(slot))
-
-    def _draw_right(self, left_w: int, h: int, w: int) -> None:
-        x0 = left_w + 2
-        cw = w - x0 - 1
-        if cw < 10:
-            return
-
-        # Header (2 rows to match left panel)
-        self._put(1, x0, "CONVERSATION", _cp(_SLOT_ACCENT) | curses.A_BOLD)
-        count_str = f"#{self._exchange_count}"
-        self._put(2, x0, count_str, _cp(_SLOT_DIM))
-
-        # Separator at row 3 drawn by _draw()
-
-        body_top = 4
-        body_end = h - 4
-        conv_height = body_end - body_top + 1
-        if conv_height < 1:
-            return
-
-        # Build display lines: (text_slot, prefix, prefix_slot, text)
-        display_lines: list[tuple[int, str, int, str]] = []
-        with self._lock:
-            entries = list(self._right_lines)
-
-        for text_slot, prefix_slot, prefix, text in entries:
-            plen = len(prefix)
-            text_w = cw - plen
-            if text_w < 5:
-                plen = 0
-                prefix = ""
-                text_w = cw
-
-            lines = textwrap.wrap(text, width=text_w) or [""]
-            # First line: colored prefix + text
-            display_lines.append((text_slot, prefix, prefix_slot, lines[0]))
-            # Continuation: indent with gutter
-            cont_prefix = " " * (plen - 2) + "| " if plen >= 2 else " " * plen
-            for ln in lines[1:]:
-                display_lines.append((text_slot, cont_prefix, _SLOT_BORDER, ln))
-
-        # Empty state
-        if not display_lines:
-            msg = "Waiting for conversation..."
-            self._put(
-                body_top + conv_height // 2,
-                x0 + (cw - len(msg)) // 2,
-                msg,
-                _cp(_SLOT_DIM),
-            )
-            return
-
-        total = len(display_lines)
-        start = max(0, total - conv_height)
-        visible = display_lines[start : start + conv_height]
-
-        for i, (text_slot, prefix, prefix_slot, txt) in enumerate(visible):
-            r = body_top + i
-            if prefix:
-                self._put(
-                    r, x0, prefix, _cp(prefix_slot) if prefix_slot else _cp(text_slot)
-                )
-            self._put(r, x0 + len(prefix), txt, _cp(text_slot))
-
-        # Scrollbar
-        if total > conv_height:
-            sb_top = body_top + (start * conv_height) // total
-            sb_len = max(1, (conv_height * conv_height) // total)
-            sb_col = w - 1
-            for r in range(body_top, body_top + conv_height):
-                if sb_top <= r < sb_top + sb_len:
-                    self._addch(r, sb_col, curses.ACS_BLOCK, _cp(_SLOT_DIM))
-
-    def _draw_status(self, h: int, w: int) -> None:
-        row = h - 2
-        sba = _cp(_SLOT_STATUSBAR)
-
-        # Fill bar
-        self._put(row, 1, " " * (w - 2), sba)
-
-        # VAD
-        if self._vad_active:
-            self._put(row, 2, " MIC ", _cp(_SLOT_GREEN) | curses.A_BOLD)
+        if self.vad_active:
+            new_val = abs(math.sin(self.frame * 0.2)) * 8
+            self.waveform_data.append(new_val)
         else:
-            self._put(row, 2, " MIC ", sba)
+            self.waveform_data.append(max(0, self.waveform_data[-1] * 0.8))
 
-        # Status
-        self._put(row, 8, self._status_text, sba | curses.A_BOLD)
+        self.refresh()
 
-        # Right side: quit hint + exchanges
-        right = f" q:quit  {self._exchange_count} exchanges "
-        self._put(row, w - len(right) - 1, right, sba)
+    def render(self) -> Text:
+        bars = " ▁▂▃▄▅▆▇█"
+        waveform = ""
 
-    # ── Events ────────────────────────────────────────────────────────────────
+        for val in list(self.waveform_data):
+            idx = min(len(bars) - 1, int(val))
+            waveform += bars[idx]
 
-    def _add_right(
-        self, text_slot: int, prefix_slot: int, prefix: str, text: str
-    ) -> None:
-        with self._lock:
-            self._right_lines.append((text_slot, prefix_slot, prefix, text))
+        style = "bold cyan" if self.vad_active else "dim cyan"
+        return Text(waveform, style=style)
 
-    def _add_separator(self) -> None:
-        with self._lock:
-            self._right_lines.append((_SLOT_SEPARATOR, 0, "", ""))
 
-    def _end_ai_blocks(self) -> None:
-        if self._in_ai_voice_block:
-            self._add_right(_SLOT_AI_TEXT, 0, "", "")
-            self._in_ai_voice_block = False
-        if self._in_ai_text_block:
-            self._add_right(_SLOT_AI_TEXT, 0, "", "")
-            self._in_ai_text_block = False
+class SystemPanel(Container):
+    """Left panel showing system information and stats."""
 
-    def _handle_event(self, event: DisplayEvent) -> None:
+    status_text = reactive("INITIALIZING")
+    last_stats: reactive[RequestStats | None] = reactive(None)
+    exchange_count = reactive(0)
+    session_cost = reactive(0.0)
+    session_tokens_in = reactive(0)
+    session_tokens_out = reactive(0)
+    vad_active = reactive(False)
+
+    def __init__(self) -> None:
+        super().__init__(id="system-panel")
+        self.response_times: deque[float] = deque(maxlen=20)
+        self.pulse_frame = 0
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="system-header")
+        yield Static(id="system-info")
+        yield WaveformWidget(id="waveform")
+        yield Static(id="stats-display")
+        yield Static(id="session-display")
+        yield Static(id="status-display")
+
+    def on_mount(self) -> None:
+        self.set_interval(1 / 10, self.update_pulse)
+        self.update_display()
+
+    def update_pulse(self) -> None:
+        self.pulse_frame += 1
+        self.update_header()
+
+    def update_header(self) -> None:
+        pulse = "●" if (self.pulse_frame // 10) % 2 == 0 else "○"
+        header = Text()
+        header.append(f"{pulse} ", style="bold bright_cyan")
+        header.append("VILBERTA", style="bold bright_magenta")
+        self.query_one("#system-header", Static).update(header)
+
+    def update_display(self) -> None:
+        self.update_header()
+        self.update_system_info()
+        self.update_stats()
+        self.update_session()
+        self.update_status()
+
+    def update_system_info(self) -> None:
+        info = Text()
+        info.append(f"{MODEL_NAME[:30]}\n", style="cyan")
+        info.append(f"{TTS_VOICE} • {SAMPLE_RATE // 1000}kHz\n", style="dim")
+        info.append("\n")
+        info.append("AUDIO WAVEFORM", style="dim")
+        self.query_one("#system-info", Static).update(info)
+
+    def update_stats(self) -> None:
+        if not self.last_stats:
+            self.query_one("#stats-display", Static).update("")
+            return
+
+        stats = self.last_stats
+        table = Table.grid(padding=(0, 1))
+        table.add_column(justify="right", style="dim")
+        table.add_column(style="cyan")
+
+        table.add_row("Duration", f"{stats.audio_duration_s:.2f}s")
+        table.add_row("TTFT", f"{stats.ttft_s:.2f}s")
+        table.add_row("Latency", f"{stats.total_latency_s:.2f}s")
+        table.add_row("Input", f"{stats.input_tokens:,}")
+        table.add_row("Output", f"{stats.output_tokens:,}")
+
+        if stats.cache_read_tokens:
+            table.add_row("Cache R", f"{stats.cache_read_tokens:,}")
+        if stats.cache_write_tokens:
+            table.add_row("Cache W", f"{stats.cache_write_tokens:,}")
+
+        display = Group(
+            Text("LAST REQUEST", style="dim"), Text("─" * 28, style="dim"), table
+        )
+
+        self.query_one("#stats-display", Static).update(display)
+
+    def update_session(self) -> None:
+        table = Table.grid(padding=(0, 1))
+        table.add_column(justify="right", style="dim")
+        table.add_column(style="bright_magenta")
+
+        table.add_row("Turns", str(self.exchange_count))
+        table.add_row("Cost", f"${self.session_cost:.4f}")
+        table.add_row("Tok In", f"{self.session_tokens_in:,}")
+        table.add_row("Tok Out", f"{self.session_tokens_out:,}")
+
+        sparkline = self.create_sparkline()
+
+        display = Group(
+            Text("\nSESSION", style="dim"),
+            Text("─" * 28, style="dim"),
+            table,
+            Text("\nRESPONSE TIMES", style="dim"),
+            sparkline,
+        )
+
+        self.query_one("#session-display", Static).update(display)
+
+    def create_sparkline(self) -> Text:
+        if not self.response_times:
+            return Text("", style="cyan")
+
+        bars = "▁▂▃▄▅▆▇█"
+        times = list(self.response_times)
+        max_val = max(times) if max(times) > 0 else 1.0
+
+        sparkline = ""
+        for val in times:
+            idx = min(len(bars) - 1, int((val / max_val) * len(bars)))
+            sparkline += bars[idx]
+
+        return Text(sparkline, style="cyan")
+
+    def update_status(self) -> None:
+        style = "bold bright_cyan" if "LISTEN" in self.status_text else "bold cyan"
+        status = Text("▸ ", style=style)
+        status.append(self.status_text, style=style)
+
+        display = Group(Text("\nSTATUS", style="dim"), status)
+
+        self.query_one("#status-display", Static).update(display)
+
+    def watch_status_text(self, value: str) -> None:
+        self.update_status()
+
+    def watch_last_stats(self, value: RequestStats | None) -> None:
+        if value:
+            self.response_times.append(value.total_latency_s)
+        self.update_stats()
+        self.update_session()
+
+    def watch_exchange_count(self, value: int) -> None:
+        self.update_session()
+
+    def watch_session_cost(self, value: float) -> None:
+        self.update_session()
+
+    def watch_session_tokens_in(self, value: int) -> None:
+        self.update_session()
+
+    def watch_session_tokens_out(self, value: int) -> None:
+        self.update_session()
+
+    def watch_vad_active(self, value: bool) -> None:
+        waveform = self.query_one("#waveform", WaveformWidget)
+        waveform.vad_active = value
+
+
+class ConversationPanel(Vertical):
+    """Center panel showing conversation history."""
+
+    def __init__(self) -> None:
+        super().__init__(id="conversation-panel")
+
+    def compose(self) -> ComposeResult:
+        yield RichLog(
+            id="conversation-log",
+            highlight=False,
+            markup=True,
+            auto_scroll=True,
+            wrap=True,
+        )
+
+
+class EventsPanel(Vertical):
+    """Right panel showing event log."""
+
+    def __init__(self) -> None:
+        super().__init__(id="events-panel")
+
+    def compose(self) -> ComposeResult:
+        yield RichLog(
+            id="events-log",
+            highlight=False,
+            markup=True,
+            max_lines=100,
+            auto_scroll=True,
+        )
+        yield Static(id="shortcuts")
+
+    def on_mount(self) -> None:
+        shortcuts = Text()
+        shortcuts.append("SHORTCUTS\n", style="dim")
+        shortcuts.append("─────────\n", style="dim")
+        shortcuts.append("  q  ", style="cyan")
+        shortcuts.append("Quit\n", style="dim")
+        shortcuts.append("  ↑↓ ", style="cyan")
+        shortcuts.append("Scroll\n", style="dim")
+        shortcuts.append("Home ", style="cyan")
+        shortcuts.append("Top\n", style="dim")
+        shortcuts.append(" End ", style="cyan")
+        shortcuts.append("Bottom", style="dim")
+
+        self.query_one("#shortcuts", Static).update(shortcuts)
+
+
+class VilbertaTUI(App[None]):
+    """Futuristic TUI for Vilberta voice assistant."""
+
+    CSS = """
+    Screen {
+        background: #0a0a0a;
+    }
+    
+    #system-panel {
+        width: 35;
+        height: 100%;
+        border: heavy #00ffff;
+        border-title-color: #ff00ff;
+        border-title-style: bold;
+        padding: 1 2;
+        background: #0a0a14;
+    }
+    
+    #conversation-panel {
+        width: 1fr;
+        height: 100%;
+        border: heavy #00ffff;
+        border-title-color: #ff00ff;
+        border-title-style: bold;
+        padding: 1 2;
+        background: #0a0a14;
+        margin: 0 1;
+    }
+    
+    #events-panel {
+        width: 32;
+        height: 100%;
+        border: heavy #00ffff;
+        border-title-color: #ff00ff;
+        border-title-style: bold;
+        padding: 1 2;
+        background: #0a0a14;
+    }
+    
+    #conversation-log {
+        height: 1fr;
+        border: none;
+        background: transparent;
+        color: #e0e0e0;
+    }
+    
+    #events-log {
+        height: 1fr;
+        border: none;
+        background: transparent;
+        scrollbar-color: #00ffff;
+        scrollbar-color-hover: #ff00ff;
+    }
+    
+    #shortcuts {
+        height: auto;
+        margin-top: 1;
+        border-top: solid #00ffff;
+        padding-top: 1;
+    }
+    
+    #waveform {
+        height: 3;
+        content-align: center middle;
+        background: #050510;
+        border: solid #00ffff;
+        margin: 1 0;
+    }
+    
+    Footer {
+        background: #00ffff;
+        color: #000000;
+    }
+    """
+
+    BINDINGS = [
+        ("q", "quit", "Quit"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.event_queue: Queue[DisplayEvent] | None = None
+        self.shutdown_event: threading.Event | None = None
+        self.in_ai_voice_block = False
+        self.in_ai_text_block = False
+
+    def compose(self) -> ComposeResult:
+        with Horizontal():
+            yield SystemPanel()
+            yield ConversationPanel()
+            yield EventsPanel()
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.title = "VILBERTA"
+        self.sub_title = "Voice Intelligence System"
+
+        self.query_one("#system-panel").border_title = "SYSTEM"
+        self.query_one("#conversation-panel").border_title = "CONVERSATION"
+        self.query_one("#events-panel").border_title = "EVENTS"
+
+        self.set_interval(1 / 30, self.process_events)
+
+    def process_events(self) -> None:
+        if self.shutdown_event and self.shutdown_event.is_set():
+            self.exit()
+            return
+
+        if not self.event_queue:
+            return
+
+        try:
+            while True:
+                event = self.event_queue.get_nowait()
+                self.handle_event(event)
+        except Empty:
+            pass
+
+    def handle_event(self, event: DisplayEvent) -> None:
+        conversation = self.query_one("#conversation-log", RichLog)
+        events_log = self.query_one("#events-log", RichLog)
+        system_panel = self.query_one("#system-panel", SystemPanel)
+
         if event.type == "speak":
-            # End any prior text block before voice block
-            if self._in_ai_text_block:
-                self._add_right(_SLOT_AI_TEXT, 0, "", "")
-                self._in_ai_text_block = False
-            if not self._in_ai_voice_block:
-                self._add_right(
-                    _SLOT_SPEECH, _SLOT_AI_PREFIX, " ai-voice > ", event.content
-                )
-                self._in_ai_voice_block = True
+            if self.in_ai_text_block:
+                conversation.write("")
+                self.in_ai_text_block = False
+
+            if not self.in_ai_voice_block:
+                conversation.write(Text(f"🤖 > {event.content}", style="bold yellow"))
+                self.in_ai_voice_block = True
             else:
-                self._add_right(
-                    _SLOT_SPEECH, _SLOT_BORDER, "          | ", event.content
-                )
-            self._add_log(_SLOT_YELLOW, f"SPEAK  {event.content[:40]}")
+                conversation.write(Text(f"    │ {event.content}", style="yellow"))
+
+            events_log.write(Text(f"SPEAK {event.content[:30]}", style="yellow"))
+
         elif event.type == "text":
-            # End any prior voice block before text block
-            if self._in_ai_voice_block:
-                self._add_right(_SLOT_AI_TEXT, 0, "", "")
-                self._in_ai_voice_block = False
+            if self.in_ai_voice_block:
+                conversation.write("")
+                self.in_ai_voice_block = False
+
             lines = event.content.splitlines()
             for line in lines:
-                if not self._in_ai_text_block:
-                    self._add_right(
-                        _SLOT_AI_TEXT, _SLOT_AI_PREFIX, "  ai-text > ", line
-                    )
-                    self._in_ai_text_block = True
+                if not self.in_ai_text_block:
+                    conversation.write(Text(f"💬 > {line}", style="bold magenta"))
+                    self.in_ai_text_block = True
                 else:
-                    self._add_right(_SLOT_AI_TEXT, _SLOT_BORDER, "          | ", line)
-            self._add_log(_SLOT_ACCENT, f"TEXT   {event.content[:40]}")
+                    conversation.write(Text(f"    │ {line}", style="magenta"))
+
+            events_log.write(Text(f"TEXT  {event.content[:30]}", style="magenta"))
+
         elif event.type == "transcript":
-            self._end_ai_blocks()
-            self._add_separator()
-            self._add_right(
-                _SLOT_USER, _SLOT_USER_PREFIX, "      you > ", event.content
-            )
-            self._add_right(_SLOT_USER, 0, "", "")
-            self._exchange_count += 1
-            self._add_log(_SLOT_USER_PREFIX, f"USER   {event.content[:40]}")
+            self.end_ai_blocks(conversation)
+            conversation.write("")
+            conversation.write(Text(f"👤 > {event.content}", style="bold bright_cyan"))
+            conversation.write("")
+
+            system_panel.exchange_count += 1
+            events_log.write(Text(f"USER  {event.content[:30]}", style="bright_cyan"))
+
         elif event.type == "status":
             msg = event.content.strip()
             if msg.startswith("[") and msg.endswith("]"):
-                self._add_right(_SLOT_DIM, 0, "            ", msg)
-            if "Listening..." in event.content or "Processing..." in event.content:
-                self._end_ai_blocks()
+                conversation.write(Text(f"       {msg}", style="dim"))
+
             status_map = {
                 "Listening...": "LISTENING",
                 "Processing...": "PROCESSING",
@@ -484,70 +451,85 @@ class CursesTUI:
                 "Initializing LLM service...": "INIT LLM",
                 "Ready. Listening...": "LISTENING",
             }
+
             for key, val in status_map.items():
                 if key in event.content:
-                    self._status_text = val
+                    system_panel.status_text = val
                     break
-            self._add_log(_SLOT_DIM, f"STATUS {msg[:40]}")
-        elif event.type == "error":
-            self._add_right(_SLOT_ERROR, _SLOT_ERROR, "      err > ", event.content)
-            self._add_log(_SLOT_ERROR, f"ERROR  {event.content[:40]}")
-        elif event.type == "vad":
-            self._vad_active = event.content == "up"
-            self._add_log(
-                _SLOT_GREEN if event.content == "up" else _SLOT_DIM,
-                f"VAD    {'▲ speech' if event.content == 'up' else '▼ silence'}",
-            )
-        elif event.type == "stats":
-            if event.stats is not None:
-                self._last_stats = event.stats
-                s = event.stats
-                self._add_log(
-                    _SLOT_ACCENT,
-                    f"STATS  ttft={s.ttft_s:.2f}s in={s.input_tokens} out={s.output_tokens}",
-                )
-        elif event.type == "boot":
-            self._add_log(_SLOT_ACCENT, f"BOOT   {event.content.strip()[:40]}")
 
-    # ── Run loop ──────────────────────────────────────────────────────────────
+            events_log.write(Text(f"STAT  {msg[:30]}", style="dim"))
+
+        elif event.type == "error":
+            conversation.write(Text(f"❌ > {event.content}", style="bold red"))
+            events_log.write(Text(f"ERROR {event.content[:30]}", style="red"))
+
+        elif event.type == "vad":
+            system_panel.vad_active = event.content == "up"
+            status = "▲ speech" if event.content == "up" else "▼ silence"
+            style = "green" if event.content == "up" else "dim"
+            events_log.write(Text(f"VAD   {status}", style=style))
+
+        elif event.type == "stats":
+            if event.stats:
+                system_panel.last_stats = event.stats
+                system_panel.session_cost += event.stats.cost_usd
+                system_panel.session_tokens_in += event.stats.input_tokens
+                system_panel.session_tokens_out += event.stats.output_tokens
+
+                events_log.write(
+                    Text(
+                        f"STATS ttft={event.stats.ttft_s:.2f}s "
+                        f"in={event.stats.input_tokens} out={event.stats.output_tokens}",
+                        style="cyan",
+                    )
+                )
+
+        elif event.type == "boot":
+            events_log.write(Text(f"BOOT  {event.content.strip()[:30]}", style="cyan"))
+
+    def end_ai_blocks(self, conversation: RichLog) -> None:
+        if self.in_ai_voice_block or self.in_ai_text_block:
+            conversation.write("")
+            self.in_ai_voice_block = False
+            self.in_ai_text_block = False
+
+    async def action_quit(self) -> None:
+        """Quit the application."""
+        if self.shutdown_event:
+            self.shutdown_event.set()
+        self.exit()
+
+    def setup(
+        self, event_queue: Queue[DisplayEvent], shutdown_event: threading.Event
+    ) -> None:
+        """Setup the TUI with the given event queue and shutdown event."""
+        self.event_queue = event_queue
+        self.shutdown_event = shutdown_event
+
+
+def run_tui(event_queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None:
+    app = VilbertaTUI()
+    app.setup(event_queue, shutdown_event)
+    app.run()
+
+
+# Compatibility wrapper class for backward compatibility with main.py
+class CursesTUI:
+    """Wrapper class that mimics the old CursesTUI interface."""
+
+    def __init__(self) -> None:
+        self.app = VilbertaTUI()
 
     def run(
         self, event_queue: Queue[DisplayEvent], shutdown_event: threading.Event
     ) -> None:
-        scr = self._init_curses()
-        try:
-            self._draw()
-            while not shutdown_event.is_set():
-                had_events = False
-                try:
-                    while True:
-                        event = event_queue.get_nowait()
-                        self._handle_event(event)
-                        had_events = True
-                except Empty:
-                    pass
-
-                try:
-                    key = scr.getch()
-                    if key == curses.KEY_RESIZE:
-                        had_events = True
-                    elif key == ord("q"):
-                        shutdown_event.set()
-                        break
-                except curses.error:
-                    pass
-
-                if had_events:
-                    self._draw()
-
-                time.sleep(0.05)
-        finally:
-            self.cleanup()
+        """Run the TUI with the given event queue and shutdown event."""
+        self.app.setup(event_queue, shutdown_event)
+        self.app.run()
 
     def cleanup(self) -> None:
-        if self._stdscr is not None:
-            curses.nocbreak()
-            self._stdscr.keypad(False)
-            curses.echo()
-            curses.endwin()
-            self._stdscr = None
+        """Cleanup method for compatibility (Textual handles cleanup automatically)."""
+        pass
+
+
+# vilberta_textual_tui.py
