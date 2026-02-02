@@ -1,22 +1,34 @@
-"""Futuristic Textual-based TUI for vilberta with animations."""
+"""Textual-based TUI for vilberta with theme support and minimal CSS."""
 
 from __future__ import annotations
 
 import threading
+import re
 from collections import deque
 from dataclasses import dataclass
 from queue import Queue, Empty
 from typing import Any
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical, Container
-from textual.widgets import Static, RichLog, Footer
+from textual.containers import Horizontal, Vertical, Container, VerticalScroll
+from textual.widgets import Static, Footer
 from textual.reactive import reactive
-from rich.text import Text
-from rich.console import Group
-from rich.table import Table
 
 from vilberta.config import MODEL_NAME, TTS_VOICE, SAMPLE_RATE
+
+
+def parse_markdown_to_textual(text: str) -> str:
+    """Convert markdown formatting to Textual markup."""
+    # Bold: **text** -> [bold]text[/]
+    text = re.sub(r'\*\*(.+?)\*\*', r'[bold]\1[/]', text)
+    
+    # Italic: *text* (but not ** which was already handled)
+    text = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'[italic]\1[/]', text)
+    
+    # Underline: __text__
+    text = re.sub(r'__(.+?)__', r'[underline]\1[/]', text)
+    
+    return text
 
 
 @dataclass
@@ -64,16 +76,32 @@ class WaveformWidget(Static):
 
         self.refresh()
 
-    def render(self) -> Text:
+    def render(self) -> str:
         bars = " ▁▂▃▄▅▆▇█"
-        waveform = ""
+        waveform = "".join(
+            bars[min(len(bars) - 1, int(val))] for val in self.waveform_data
+        )
+        return waveform
 
-        for val in list(self.waveform_data):
-            idx = min(len(bars) - 1, int(val))
-            waveform += bars[idx]
 
-        style = "bold cyan" if self.vad_active else "dim cyan"
-        return Text(waveform, style=style)
+class ScrollingLog(VerticalScroll):
+    """A scrolling log widget that auto-scrolls to bottom."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.messages: list[tuple[str, str]] = []
+
+    def write(self, content: str, style: str = "", parse_markdown: bool = False) -> None:
+        """Add a message to the log."""
+        if parse_markdown:
+            content = parse_markdown_to_textual(content)
+        
+        self.messages.append((content, style))
+        
+        new_static = Static(content, markup=parse_markdown, classes=style)
+        self.mount(new_static)
+        
+        self.scroll_end(animate=False)
 
 
 class SystemPanel(Container):
@@ -110,9 +138,7 @@ class SystemPanel(Container):
 
     def update_header(self) -> None:
         pulse = "●" if (self.pulse_frame // 10) % 2 == 0 else "○"
-        header = Text()
-        header.append(f"{pulse} ", style="bold bright_cyan")
-        header.append("VILBERTA", style="bold bright_magenta")
+        header = f"{pulse} VILBERTA"
         self.query_one("#system-header", Static).update(header)
 
     def update_display(self) -> None:
@@ -123,12 +149,15 @@ class SystemPanel(Container):
         self.update_status()
 
     def update_system_info(self) -> None:
-        info = Text()
-        info.append(f"{MODEL_NAME[:30]}\n", style="cyan")
-        info.append(f"{TTS_VOICE} • {SAMPLE_RATE // 1000}kHz\n", style="dim")
-        info.append("\n")
-        info.append("AUDIO WAVEFORM", style="dim")
-        self.query_one("#system-info", Static).update(info)
+        info = (
+            f"{MODEL_NAME[:30]}\n"
+            f"{TTS_VOICE} • {SAMPLE_RATE // 1000}kHz\n"
+            "\n"
+            "AUDIO WAVEFORM"
+        )
+        widget = self.query_one("#system-info", Static)
+        widget.update(info)
+        widget.add_class("muted")
 
     def update_stats(self) -> None:
         if not self.last_stats:
@@ -136,72 +165,67 @@ class SystemPanel(Container):
             return
 
         stats = self.last_stats
-        table = Table.grid(padding=(0, 1))
-        table.add_column(justify="right", style="dim")
-        table.add_column(style="cyan")
-
-        table.add_row("Duration", f"{stats.audio_duration_s:.2f}s")
-        table.add_row("TTFT", f"{stats.ttft_s:.2f}s")
-        table.add_row("Latency", f"{stats.total_latency_s:.2f}s")
-        table.add_row("Input", f"{stats.input_tokens:,}")
-        table.add_row("Output", f"{stats.output_tokens:,}")
+        
+        lines = [
+            "LAST REQUEST",
+            "─" * 28,
+            f"Duration    {stats.audio_duration_s:.2f}s",
+            f"TTFT        {stats.ttft_s:.2f}s",
+            f"Latency     {stats.total_latency_s:.2f}s",
+            f"Input       {stats.input_tokens:,}",
+            f"Output      {stats.output_tokens:,}",
+        ]
 
         if stats.cache_read_tokens:
-            table.add_row("Cache R", f"{stats.cache_read_tokens:,}")
+            lines.append(f"Cache R     {stats.cache_read_tokens:,}")
         if stats.cache_write_tokens:
-            table.add_row("Cache W", f"{stats.cache_write_tokens:,}")
+            lines.append(f"Cache W     {stats.cache_write_tokens:,}")
 
-        display = Group(
-            Text("LAST REQUEST", style="dim"), Text("─" * 28, style="dim"), table
-        )
-
-        self.query_one("#stats-display", Static).update(display)
+        self.query_one("#stats-display", Static).update("\n".join(lines))
 
     def update_session(self) -> None:
-        table = Table.grid(padding=(0, 1))
-        table.add_column(justify="right", style="dim")
-        table.add_column(style="bright_magenta")
-
-        table.add_row("Turns", str(self.exchange_count))
-        table.add_row("Cost", f"${self.session_cost:.4f}")
-        table.add_row("Tok In", f"{self.session_tokens_in:,}")
-        table.add_row("Tok Out", f"{self.session_tokens_out:,}")
-
         sparkline = self.create_sparkline()
-
-        display = Group(
-            Text("\nSESSION", style="dim"),
-            Text("─" * 28, style="dim"),
-            table,
-            Text("\nRESPONSE TIMES", style="dim"),
+        
+        lines = [
+            "",
+            "SESSION",
+            "─" * 28,
+            f"Turns       {self.exchange_count}",
+            f"Cost        ${self.session_cost:.4f}",
+            f"Tok In      {self.session_tokens_in:,}",
+            f"Tok Out     {self.session_tokens_out:,}",
+            "",
+            "RESPONSE TIMES",
             sparkline,
-        )
+        ]
 
-        self.query_one("#session-display", Static).update(display)
+        self.query_one("#session-display", Static).update("\n".join(lines))
 
-    def create_sparkline(self) -> Text:
+    def create_sparkline(self) -> str:
         if not self.response_times:
-            return Text("", style="cyan")
+            return ""
 
         bars = "▁▂▃▄▅▆▇█"
         times = list(self.response_times)
         max_val = max(times) if max(times) > 0 else 1.0
 
-        sparkline = ""
-        for val in times:
-            idx = min(len(bars) - 1, int((val / max_val) * len(bars)))
-            sparkline += bars[idx]
+        sparkline = "".join(
+            bars[min(len(bars) - 1, int((val / max_val) * len(bars)))] for val in times
+        )
 
-        return Text(sparkline, style="cyan")
+        return sparkline
 
     def update_status(self) -> None:
-        style = "bold bright_cyan" if "LISTEN" in self.status_text else "bold cyan"
-        status = Text("▸ ", style=style)
-        status.append(self.status_text, style=style)
-
-        display = Group(Text("\nSTATUS", style="dim"), status)
-
-        self.query_one("#status-display", Static).update(display)
+        status = f"▸ {self.status_text}"
+        display = f"\nSTATUS\n{status}"
+        
+        widget = self.query_one("#status-display", Static)
+        widget.update(display)
+        
+        if "LISTEN" in self.status_text:
+            widget.add_class("highlight")
+        else:
+            widget.remove_class("highlight")
 
     def watch_status_text(self, value: str) -> None:
         self.update_status()
@@ -227,6 +251,12 @@ class SystemPanel(Container):
     def watch_vad_active(self, value: bool) -> None:
         waveform = self.query_one("#waveform", WaveformWidget)
         waveform.vad_active = value
+        if value:
+            waveform.add_class("active")
+            waveform.remove_class("inactive")
+        else:
+            waveform.add_class("inactive")
+            waveform.remove_class("active")
 
 
 class ConversationPanel(Vertical):
@@ -236,13 +266,7 @@ class ConversationPanel(Vertical):
         super().__init__(id="conversation-panel")
 
     def compose(self) -> ComposeResult:
-        yield RichLog(
-            id="conversation-log",
-            highlight=False,
-            markup=True,
-            auto_scroll=True,
-            wrap=True,
-        )
+        yield ScrollingLog(id="conversation-log")
 
 
 class EventsPanel(Vertical):
@@ -252,103 +276,125 @@ class EventsPanel(Vertical):
         super().__init__(id="events-panel")
 
     def compose(self) -> ComposeResult:
-        yield RichLog(
-            id="events-log",
-            highlight=False,
-            markup=True,
-            max_lines=100,
-            auto_scroll=True,
-        )
+        yield ScrollingLog(id="events-log")
         yield Static(id="shortcuts")
 
     def on_mount(self) -> None:
-        shortcuts = Text()
-        shortcuts.append("SHORTCUTS\n", style="dim")
-        shortcuts.append("─────────\n", style="dim")
-        shortcuts.append("  q  ", style="cyan")
-        shortcuts.append("Quit\n", style="dim")
-        shortcuts.append("  ↑↓ ", style="cyan")
-        shortcuts.append("Scroll\n", style="dim")
-        shortcuts.append("Home ", style="cyan")
-        shortcuts.append("Top\n", style="dim")
-        shortcuts.append(" End ", style="cyan")
-        shortcuts.append("Bottom", style="dim")
-
-        self.query_one("#shortcuts", Static).update(shortcuts)
+        shortcuts = (
+            "SHORTCUTS\n"
+            "─────────\n"
+            "  q   Quit\n"
+            "  ↑↓  Scroll\n"
+            "Home  Top\n"
+            " End  Bottom"
+        )
+        widget = self.query_one("#shortcuts", Static)
+        widget.update(shortcuts)
+        widget.add_class("muted")
 
 
 class VilbertaTUI(App[None]):
-    """Futuristic TUI for Vilberta voice assistant."""
+    """TUI for Vilberta voice assistant with theme support."""
 
     CSS = """
-    Screen {
-        background: #0a0a0a;
-    }
-    
     #system-panel {
         width: 35;
-        height: 100%;
-        border: heavy #00ffff;
-        border-title-color: #ff00ff;
-        border-title-style: bold;
         padding: 1 2;
-        background: #0a0a14;
     }
     
     #conversation-panel {
         width: 1fr;
-        height: 100%;
-        border: heavy #00ffff;
-        border-title-color: #ff00ff;
-        border-title-style: bold;
         padding: 1 2;
-        background: #0a0a14;
         margin: 0 1;
     }
     
     #events-panel {
         width: 32;
-        height: 100%;
-        border: heavy #00ffff;
-        border-title-color: #ff00ff;
-        border-title-style: bold;
         padding: 1 2;
-        background: #0a0a14;
-    }
-    
-    #conversation-log {
-        height: 1fr;
-        border: none;
-        background: transparent;
-        color: #e0e0e0;
-    }
-    
-    #events-log {
-        height: 1fr;
-        border: none;
-        background: transparent;
-        scrollbar-color: #00ffff;
-        scrollbar-color-hover: #ff00ff;
-    }
-    
-    #shortcuts {
-        height: auto;
-        margin-top: 1;
-        border-top: solid #00ffff;
-        padding-top: 1;
     }
     
     #waveform {
         height: 3;
         content-align: center middle;
-        background: #050510;
-        border: solid #00ffff;
         margin: 1 0;
+        border: solid $primary;
+        color: $primary;
     }
     
-    Footer {
-        background: #00ffff;
-        color: #000000;
+    #waveform.active {
+        color: $primary;
+        text-style: bold;
+    }
+    
+    #waveform.inactive {
+        color: $primary-darken-2;
+    }
+    
+    #shortcuts {
+        height: auto;
+        margin-top: 1;
+        border-top: solid $primary;
+        padding-top: 1;
+    }
+    
+    #system-header {
+        text-style: bold;
+        color: $primary;
+    }
+    
+    .muted {
+        color: $foreground-muted;
+    }
+    
+    .highlight {
+        color: $primary;
+        text-style: bold;
+    }
+    
+    .ai-voice {
+        color: $warning;
+    }
+    
+    .ai-voice.first {
+        text-style: bold;
+    }
+    
+    .ai-text {
+        color: $secondary;
+    }
+    
+    .ai-text.first {
+        text-style: bold;
+    }
+    
+    .user {
+        color: $primary;
+        text-style: bold;
+    }
+    
+    .status {
+        color: $foreground-muted;
+    }
+    
+    .error {
+        color: $error;
+        text-style: bold;
+    }
+    
+    .vad-active {
+        color: $success;
+    }
+    
+    .vad-inactive {
+        color: $foreground-muted;
+    }
+    
+    .event {
+        color: $primary;
+    }
+    
+    ScrollingLog {
+        height: 1fr;
     }
     """
 
@@ -396,8 +442,8 @@ class VilbertaTUI(App[None]):
             pass
 
     def handle_event(self, event: DisplayEvent) -> None:
-        conversation = self.query_one("#conversation-log", RichLog)
-        events_log = self.query_one("#events-log", RichLog)
+        conversation = self.query_one("#conversation-log", ScrollingLog)
+        events_log = self.query_one("#events-log", ScrollingLog)
         system_panel = self.query_one("#system-panel", SystemPanel)
 
         if event.type == "speak":
@@ -406,12 +452,12 @@ class VilbertaTUI(App[None]):
                 self.in_ai_text_block = False
 
             if not self.in_ai_voice_block:
-                conversation.write(Text(f"🤖 > {event.content}", style="bold yellow"))
+                conversation.write(f"🤖 > {event.content}", "ai-voice first", parse_markdown=True)
                 self.in_ai_voice_block = True
             else:
-                conversation.write(Text(f"    │ {event.content}", style="yellow"))
+                conversation.write(f"    │ {event.content}", "ai-voice", parse_markdown=True)
 
-            events_log.write(Text(f"SPEAK {event.content[:30]}", style="yellow"))
+            events_log.write(f"SPEAK {event.content[:30]}", "ai-voice")
 
         elif event.type == "text":
             if self.in_ai_voice_block:
@@ -421,26 +467,26 @@ class VilbertaTUI(App[None]):
             lines = event.content.splitlines()
             for line in lines:
                 if not self.in_ai_text_block:
-                    conversation.write(Text(f"💬 > {line}", style="bold magenta"))
+                    conversation.write(f"💬 > {line}", "ai-text first", parse_markdown=True)
                     self.in_ai_text_block = True
                 else:
-                    conversation.write(Text(f"    │ {line}", style="magenta"))
+                    conversation.write(f"    │ {line}", "ai-text", parse_markdown=True)
 
-            events_log.write(Text(f"TEXT  {event.content[:30]}", style="magenta"))
+            events_log.write(f"TEXT  {event.content[:30]}", "ai-text")
 
         elif event.type == "transcript":
             self.end_ai_blocks(conversation)
             conversation.write("")
-            conversation.write(Text(f"👤 > {event.content}", style="bold bright_cyan"))
+            conversation.write(f"👤 > {event.content}", "user")
             conversation.write("")
 
             system_panel.exchange_count += 1
-            events_log.write(Text(f"USER  {event.content[:30]}", style="bright_cyan"))
+            events_log.write(f"USER  {event.content[:30]}", "user")
 
         elif event.type == "status":
             msg = event.content.strip()
             if msg.startswith("[") and msg.endswith("]"):
-                conversation.write(Text(f"       {msg}", style="dim"))
+                conversation.write(f"       {msg}", "status")
 
             status_map = {
                 "Listening...": "LISTENING",
@@ -457,17 +503,17 @@ class VilbertaTUI(App[None]):
                     system_panel.status_text = val
                     break
 
-            events_log.write(Text(f"STAT  {msg[:30]}", style="dim"))
+            events_log.write(f"STAT  {msg[:30]}", "status")
 
         elif event.type == "error":
-            conversation.write(Text(f"❌ > {event.content}", style="bold red"))
-            events_log.write(Text(f"ERROR {event.content[:30]}", style="red"))
+            conversation.write(f"❌ > {event.content}", "error")
+            events_log.write(f"ERROR {event.content[:30]}", "error")
 
         elif event.type == "vad":
             system_panel.vad_active = event.content == "up"
             status = "▲ speech" if event.content == "up" else "▼ silence"
-            style = "green" if event.content == "up" else "dim"
-            events_log.write(Text(f"VAD   {status}", style=style))
+            style = "vad-active" if event.content == "up" else "vad-inactive"
+            events_log.write(f"VAD   {status}", style)
 
         elif event.type == "stats":
             if event.stats:
@@ -477,17 +523,15 @@ class VilbertaTUI(App[None]):
                 system_panel.session_tokens_out += event.stats.output_tokens
 
                 events_log.write(
-                    Text(
-                        f"STATS ttft={event.stats.ttft_s:.2f}s "
-                        f"in={event.stats.input_tokens} out={event.stats.output_tokens}",
-                        style="cyan",
-                    )
+                    f"STATS ttft={event.stats.ttft_s:.2f}s "
+                    f"in={event.stats.input_tokens} out={event.stats.output_tokens}",
+                    "event"
                 )
 
         elif event.type == "boot":
-            events_log.write(Text(f"BOOT  {event.content.strip()[:30]}", style="cyan"))
+            events_log.write(f"BOOT  {event.content.strip()[:30]}", "event")
 
-    def end_ai_blocks(self, conversation: RichLog) -> None:
+    def end_ai_blocks(self, conversation: ScrollingLog) -> None:
         if self.in_ai_voice_block or self.in_ai_text_block:
             conversation.write("")
             self.in_ai_voice_block = False
@@ -513,9 +557,8 @@ def run_tui(event_queue: Queue[DisplayEvent], shutdown_event: threading.Event) -
     app.run()
 
 
-# Compatibility wrapper class for backward compatibility with main.py
 class CursesTUI:
-    """Wrapper class that mimics the old CursesTUI interface."""
+    """Wrapper class for backward compatibility."""
 
     def __init__(self) -> None:
         self.app = VilbertaTUI()
@@ -528,7 +571,7 @@ class CursesTUI:
         self.app.run()
 
     def cleanup(self) -> None:
-        """Cleanup method for compatibility (Textual handles cleanup automatically)."""
+        """Cleanup method for compatibility."""
         pass
 
 
