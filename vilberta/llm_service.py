@@ -1,5 +1,6 @@
 import os
 import time
+from abc import ABC, abstractmethod
 from typing import cast, Any
 from pathlib import Path
 from collections.abc import Generator
@@ -64,7 +65,56 @@ class ConversationHistory:
         return [{"role": "system", "content": system_prompt}] + self.messages
 
 
-class LLMService:
+class BaseLLMService(ABC):
+    """Abstract base class for LLM services."""
+
+    @abstractmethod
+    def stream_response(self, audio_b64: str) -> Generator[Section, None, str]:
+        """Stream response sections from LLM.
+
+        Yields Section objects and returns full response string.
+        """
+        ...
+
+    @abstractmethod
+    def mark_interrupted(self) -> None:
+        """Mark that the user interrupted the response."""
+        ...
+
+    @property
+    @abstractmethod
+    def last_input_tokens(self) -> int:
+        """Input tokens from last request."""
+        ...
+
+    @property
+    @abstractmethod
+    def last_output_tokens(self) -> int:
+        """Output tokens from last request."""
+        ...
+
+    @property
+    @abstractmethod
+    def last_cache_read_tokens(self) -> int:
+        """Cache read tokens from last request."""
+        ...
+
+    @property
+    @abstractmethod
+    def last_cache_write_tokens(self) -> int:
+        """Cache write tokens from last request."""
+        ...
+
+    @property
+    @abstractmethod
+    def last_ttft(self) -> float:
+        """Time to first token from last request."""
+        ...
+
+
+class BasicLLMService(BaseLLMService):
+    """Basic LLM service with streaming responses (no tool calling)."""
+
     def __init__(self) -> None:
         cfg = get_config()
         api_key = os.environ.get(cfg.api_key_env, "")
@@ -73,11 +123,31 @@ class LLMService:
         self.history = ConversationHistory()
 
         # Metrics from last request
-        self.last_input_tokens = 0
-        self.last_output_tokens = 0
-        self.last_cache_read_tokens = 0
-        self.last_cache_write_tokens = 0
-        self.last_ttft = 0.0
+        self._last_input_tokens = 0
+        self._last_output_tokens = 0
+        self._last_cache_read_tokens = 0
+        self._last_cache_write_tokens = 0
+        self._last_ttft = 0.0
+
+    @property
+    def last_input_tokens(self) -> int:
+        return self._last_input_tokens
+
+    @property
+    def last_output_tokens(self) -> int:
+        return self._last_output_tokens
+
+    @property
+    def last_cache_read_tokens(self) -> int:
+        return self._last_cache_read_tokens
+
+    @property
+    def last_cache_write_tokens(self) -> int:
+        return self._last_cache_write_tokens
+
+    @property
+    def last_ttft(self) -> float:
+        return self._last_ttft
 
     def stream_response(self, audio_b64: str) -> Generator[Section, None, str]:
         self.history.add_user_audio(audio_b64)
@@ -99,33 +169,33 @@ class LLMService:
         first_token = True
 
         # Reset metrics
-        self.last_input_tokens = 0
-        self.last_output_tokens = 0
-        self.last_cache_read_tokens = 0
-        self.last_cache_write_tokens = 0
-        self.last_ttft = 0.0
+        self._last_input_tokens = 0
+        self._last_output_tokens = 0
+        self._last_cache_read_tokens = 0
+        self._last_cache_write_tokens = 0
+        self._last_ttft = 0.0
 
         for chunk in stream:
             # Extract usage from the final chunk
             if hasattr(chunk, "usage") and chunk.usage is not None:
-                self.last_input_tokens = getattr(chunk.usage, "prompt_tokens", 0) or 0
-                self.last_output_tokens = (
+                self._last_input_tokens = getattr(chunk.usage, "prompt_tokens", 0) or 0
+                self._last_output_tokens = (
                     getattr(chunk.usage, "completion_tokens", 0) or 0
                 )
                 # OpenRouter / some providers expose cache info
                 detail = getattr(chunk.usage, "prompt_tokens_details", None)
                 if detail:
-                    self.last_cache_read_tokens = (
+                    self._last_cache_read_tokens = (
                         getattr(detail, "cached_tokens", 0) or 0
                     )
-                    self.last_cache_write_tokens = (
+                    self._last_cache_write_tokens = (
                         getattr(detail, "audio_tokens", 0) or 0
                     )
 
             delta = chunk.choices[0].delta if chunk.choices else None
             if delta and delta.content:
                 if first_token:
-                    self.last_ttft = time.monotonic() - t0
+                    self._last_ttft = time.monotonic() - t0
                     first_token = False
                 text = delta.content
                 full_response += text
@@ -157,6 +227,10 @@ class LLMService:
         if start == -1 or end == -1:
             return None
         return full_response[start + len("[transcript]") : end].strip()
+
+
+# Keep alias for backward compatibility
+LLMService = BasicLLMService
 
 
 # llm_service.py

@@ -11,7 +11,8 @@ from openai import OpenAI, AuthenticationError
 from vilberta.audio_capture import record_speech, audio_to_base64_wav
 from vilberta.config import init_config, get_config
 from vilberta.interrupt_monitor import InterruptMonitor
-from vilberta.llm_service import LLMService
+from vilberta.llm_service import BaseLLMService, BasicLLMService
+from vilberta.mcp_llm_service import MCPAwareLLMService
 from vilberta.response_parser import SectionType
 from vilberta.tts_engine import TTSEngine
 from vilberta.display import (
@@ -132,8 +133,21 @@ def _speak_with_monitor(tts: TTSEngine, monitor: InterruptMonitor, text: str) ->
     return completed
 
 
+def _create_llm_service() -> BaseLLMService:
+    """Create appropriate LLM service based on config mode."""
+    cfg = get_config()
+
+    if cfg.mode == "mcp":
+        if not cfg.mcp_server_url:
+            print_error("MCP mode selected but no server URL configured")
+            sys.exit(1)
+        return MCPAwareLLMService()
+
+    return BasicLLMService()
+
+
 def _process_response(
-    llm: LLMService,
+    llm: BaseLLMService,
     tts: TTSEngine,
     monitor: InterruptMonitor,
     audio_b64: str,
@@ -198,41 +212,58 @@ def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None
     print_status("TTS ready.")
 
     print_status("Initializing LLM service...")
-    llm = LLMService()
+    llm = _create_llm_service()
+
+    # Connect to MCP server if in MCP mode
+    cfg = get_config()
+    if cfg.mode == "mcp" and isinstance(llm, MCPAwareLLMService):
+        print_status("Connecting to MCP server...")
+        try:
+            llm.connect()
+        except Exception as e:
+            print_error(f"Failed to connect to MCP server: {e}")
+            sys.exit(1)
+
     print_status("Ready. Listening...")
     play_ready()
 
     monitor = InterruptMonitor()
     cfg = get_config()
 
-    while not shutdown_event.is_set():
-        audio_data = record_speech()
-        if audio_data is None:
-            continue
+    try:
+        while not shutdown_event.is_set():
+            audio_data = record_speech()
+            if audio_data is None:
+                continue
 
-        print_status("Processing...")
-        audio_dur = len(audio_data) / cfg.sample_rate
-        audio_b64 = audio_to_base64_wav(audio_data)
+            print_status("Processing...")
+            audio_dur = len(audio_data) / cfg.sample_rate
+            audio_b64 = audio_to_base64_wav(audio_data)
 
-        try:
-            _process_response(llm, tts, monitor, audio_b64, audio_dur)
-        except Exception as e:
-            print_error(f"LLM error: {e}")
+            try:
+                _process_response(llm, tts, monitor, audio_b64, audio_dur)
+            except Exception as e:
+                print_error(f"LLM error: {e}")
 
-        prefix = monitor.buffered_audio if monitor.triggered else None
-        if prefix is not None:
-            print_status("Continuing recording...")
-            audio_data = record_speech(prefix_audio=prefix)
-            if audio_data is not None:
-                print_status("Processing...")
-                audio_dur = len(audio_data) / cfg.sample_rate
-                audio_b64 = audio_to_base64_wav(audio_data)
-                try:
-                    _process_response(llm, tts, monitor, audio_b64, audio_dur)
-                except Exception as e:
-                    print_error(f"LLM error: {e}")
+            prefix = monitor.buffered_audio if monitor.triggered else None
+            if prefix is not None:
+                print_status("Continuing recording...")
+                audio_data = record_speech(prefix_audio=prefix)
+                if audio_data is not None:
+                    print_status("Processing...")
+                    audio_dur = len(audio_data) / cfg.sample_rate
+                    audio_b64 = audio_to_base64_wav(audio_data)
+                    try:
+                        _process_response(llm, tts, monitor, audio_b64, audio_dur)
+                    except Exception as e:
+                        print_error(f"LLM error: {e}")
 
-        print_status("Listening...")
+            print_status("Listening...")
+    finally:
+        # Cleanup MCP connection if applicable
+        if isinstance(llm, MCPAwareLLMService):
+            print_status("Disconnecting from MCP server...")
+            llm.cleanup()
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────

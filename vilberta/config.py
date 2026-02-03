@@ -8,6 +8,9 @@ from numpy.typing import NDArray
 
 @dataclass
 class Config:
+    # Mode: "basic" or "mcp"
+    mode: str = "basic"
+
     # LLM API settings
     api_base_url: str = "https://openrouter.ai/api/v1"
     api_key_env: str = "OPENROUTER_API_KEY"
@@ -37,6 +40,9 @@ class Config:
     # Interruption settings
     interrupt_speech_duration_ms: int = 300
 
+    # MCP settings
+    mcp_server_url: str | None = None
+
     @classmethod
     def from_toml(cls, path: Path | str | None = None) -> "Config":
         if path is None:
@@ -55,11 +61,14 @@ class Config:
         except Exception:
             return cls()
 
+        general = data.get("GENERAL", {})
         llm_api = data.get("LLM_API", {})
         tts = data.get("TTS", {})
         chat = data.get("CHAT", {})
+        mcp = data.get("MCP", {})
 
         return cls(
+            mode=general.get("mode", cls.mode),
             api_base_url=llm_api.get("api_base_url", cls.api_base_url),
             api_key_env=llm_api.get("api_key_env", cls.api_key_env),
             model_name=llm_api.get("model_name", cls.model_name),
@@ -68,6 +77,7 @@ class Config:
                 "max_hist_threshold_size", cls.max_hist_threshold_size
             ),
             hist_reset_size=chat.get("hist_reset_size", cls.hist_reset_size),
+            mcp_server_url=mcp.get("server_url", cls.mcp_server_url),
         )
 
 

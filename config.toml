@@ -1,6 +1,10 @@
 # Vilberta Configuration File
 # Place this file in the working directory or specify with -c config.toml
 
+[GENERAL]
+# Mode: "basic" or "mcp"
+mode = "basic"
+
 [LLM_API]
 api_base_url = "https://openrouter.ai/api/v1"
 api_key_env = "OPENROUTER_API_KEY"
@@ -13,3 +17,7 @@ tts_voice = "fantine"
 [CHAT]
 max_hist_threshold_size = 16
 hist_reset_size = 8
+
+[MCP]
+# MCP server URL for tool calling (only used when mode = "mcp")
+# server_url = "http://localhost:8000/mcp"
