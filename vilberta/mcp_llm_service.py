@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import time
 from dataclasses import dataclass
@@ -24,7 +25,11 @@ class MCPProcessResult:
 
 
 class MCPAwareLLMService(BaseLLMService):
-    """MCP-aware LLM service that wraps MCPService for sync usage."""
+    """MCP-aware LLM service that wraps MCPService for sync usage.
+
+    Uses a single background event loop for all async operations to avoid
+    context manager issues when entering/exiting across different loops.
+    """
 
     def __init__(self) -> None:
         cfg = get_config()
@@ -38,6 +43,24 @@ class MCPAwareLLMService(BaseLLMService):
         self._last_cache_read_tokens = 0
         self._last_cache_write_tokens = 0
         self._last_latency_s = 0.0
+
+        # Background event loop for all async operations
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: threading.Thread | None = None
+        self._loop_ready = threading.Event()
+
+    def _run_loop(self) -> None:
+        """Run the event loop in a background thread."""
+        self._loop = asyncio.new_event_loop()
+        self._loop_ready.set()
+        self._loop.run_forever()
+
+    def _run_async(self, coro: Any) -> Any:
+        """Run a coroutine in the background loop and return the result."""
+        if self._loop is None:
+            raise RuntimeError("Event loop not started")
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result()
 
     @property
     def last_input_tokens(self) -> int:
@@ -60,22 +83,33 @@ class MCPAwareLLMService(BaseLLMService):
         return self._last_latency_s
 
     def connect(self) -> None:
-        """Connect to MCP server using asyncio run."""
-        import asyncio
+        """Connect to MCP server using a background event loop."""
+        # Start the background event loop
+        self._loop_thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._loop_thread.start()
+        self._loop_ready.wait(timeout=5.0)
 
-        asyncio.run(self.mcp_service.connect())
+        if self._loop is None:
+            raise RuntimeError("Failed to start event loop")
+
+        # Connect to MCP server using the background loop
+        self._run_async(self.mcp_service.connect())
         print_status("Connected to MCP server")
 
     def cleanup(self) -> None:
-        """Cleanup MCP connection using asyncio run."""
-        import asyncio
+        """Cleanup MCP connection using the same event loop."""
+        if self._loop is not None:
+            # Run cleanup in the same loop
+            self._run_async(self.mcp_service.cleanup())
 
-        asyncio.run(self.mcp_service.cleanup())
+            # Stop the loop
+            self._loop.call_soon_threadsafe(self._loop.stop)
+
+        if self._loop_thread is not None:
+            self._loop_thread.join(timeout=5.0)
 
     def get_response(self, audio_b64: str) -> tuple[list[Section], str]:
         """Process message through MCP and return sections."""
-        import asyncio
-
         # Track active tool calls for busy indicator
         active_tool: str | None = None
         stop_spinner = threading.Event()
@@ -124,7 +158,7 @@ class MCPAwareLLMService(BaseLLMService):
         spinner_thread.start()
 
         try:
-            sections, events = asyncio.run(
+            sections, events = self._run_async(
                 self.mcp_service.process_message(audio_b64, _event_callback)
             )
         finally:
