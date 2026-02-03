@@ -15,6 +15,7 @@ from openai.types.chat import (
 
 from vilberta.config import get_config, Section, SectionType
 from vilberta.text_section_splitter import StreamSection, StreamTextSectionSplitter
+from vilberta.logger import get_logger
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "system_mcp.md"
 
@@ -118,6 +119,7 @@ class MCPService:
         self.available_tools: list[dict[str, Any]] = []
         self.system_prompt = _load_system_prompt()
         self._interrupted = False
+        self.logger = get_logger("MCPService")
 
         cfg = get_config()
         api_key = os.environ.get(cfg.api_key_env, "")
@@ -133,21 +135,27 @@ class MCPService:
 
     async def connect(self) -> None:
         """Connect to MCP server and discover tools."""
+        self.logger.info(f"Connecting to MCP server: {self.server_url}")
         transport = await self.exit_stack.enter_async_context(
             streamable_http_client(self.server_url)
         )
         read_stream, write_stream, session_id = transport
+        self.logger.debug(f"MCP session established: {session_id}")
 
         session = ClientSession(read_stream, write_stream)
         await self.exit_stack.enter_async_context(session)
         self.session = session
 
         await self.session.initialize()
+        self.logger.info("MCP session initialized")
 
         response = await self.session.list_tools()
         self.available_tools = [
             _convert_mcp_tool_to_openai(tool) for tool in response.tools
         ]
+        self.logger.info(f"Discovered {len(self.available_tools)} tools")
+        for tool in self.available_tools:
+            self.logger.debug(f"  - {tool['function']['name']}")
 
     async def process_message(
         self, audio_b64: str
@@ -160,6 +168,7 @@ class MCPService:
         if self.session is None:
             raise RuntimeError("Not connected to MCP server")
 
+        self.logger.debug("Triggering MCP LLM request")
         self._interrupted = False
         self.messages.append(
             cast(ChatCompletionMessageParam, _build_audio_user_message(audio_b64))
@@ -167,14 +176,20 @@ class MCPService:
 
         events: list[ToolCallEvent | ToolResultEvent] = []
         sections: list[Section] = []
+        turn_count = 0
 
         while not self._interrupted:
+            turn_count += 1
+            self.logger.debug(f"MCP turn {turn_count}: Requesting LLM response")
+
             # Get LLM response (non-streaming)
             completion = self.openai_client.chat.completions.create(
                 model=self.model,
                 messages=cast(Any, [self._build_system_message()] + self.messages),
                 tools=self.available_tools,  # type: ignore
             )
+
+            self.logger.info(f"LLM response received (turn {turn_count})")
 
             assistant_message = completion.choices[0].message
             self.messages.append(
@@ -193,17 +208,26 @@ class MCPService:
                     self.last_cache_write_tokens = (
                         getattr(detail, "audio_tokens", 0) or 0
                     )
+                self.logger.debug(
+                    f"Tokens: input={self.last_input_tokens}, output={self.last_output_tokens}, "
+                    f"cache_read={self.last_cache_read_tokens}, cache_write={self.last_cache_write_tokens}"
+                )
 
             # Check for tool calls
             if not assistant_message.tool_calls:
                 # Final response - parse into sections
                 content = assistant_message.content or ""
                 sections = self._parse_response(content)
+                self.logger.info(f"Final response: {len(sections)} sections parsed")
                 break
 
             # Execute tool calls
+            tool_call_count = len(assistant_message.tool_calls)
+            self.logger.info(f"LLM requested {tool_call_count} tool calls")
+
             for tool_call in assistant_message.tool_calls:
                 if self._interrupted:
+                    self.logger.debug("Tool execution interrupted")
                     break
 
                 if not isinstance(tool_call, ChatCompletionMessageFunctionToolCall):
@@ -216,10 +240,14 @@ class MCPService:
                     else {}
                 )
 
+                self.logger.info(f"Calling tool: {tool_name}({tool_args})")
                 events.append(ToolCallEvent(tool_name=tool_name, arguments=tool_args))
 
                 result_str = await self._call_tool(tool_name, tool_args)
                 success = not result_str.startswith("Error")
+
+                self.logger.info(f"Tool response: {tool_name} success={success}")
+                self.logger.debug(f"Tool result: {result_str[:200]}...")
 
                 events.append(
                     ToolResultEvent(
@@ -240,6 +268,7 @@ class MCPService:
                 )
 
         self._trim_history_if_needed()
+        self.logger.debug(f"MCP processing complete after {turn_count} turns")
 
         return sections, events
 
@@ -299,8 +328,10 @@ class MCPService:
 
     async def cleanup(self) -> None:
         """Close MCP connection."""
+        self.logger.info("Closing MCP connection")
         await self.exit_stack.aclose()
         self.session = None
+        self.logger.info("MCP connection closed")
 
 
 # mcp_service.py

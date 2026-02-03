@@ -8,3 +8,4 @@ openai>=2.8.0
 sounddevice>=0.5.5
 textual>=7.5.0
 mcp>=1.0.0
+loguru>=0.7.0

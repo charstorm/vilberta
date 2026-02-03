@@ -35,6 +35,7 @@ from vilberta.sound_effects import (
 )
 from vilberta.cli import SimpleCLI
 from vilberta.tui import CursesTUI
+from vilberta.logger import init_logger
 
 
 _EXPECTED_SOUNDS = [
@@ -285,7 +286,16 @@ def main() -> None:
         default=None,
         help="Path to config.toml file",
     )
+    parser.add_argument(
+        "-l",
+        "--log",
+        type=str,
+        default=None,
+        help="Enable logging to file (e.g., -l run.log)",
+    )
     args = parser.parse_args()
+
+    init_logger(args.log)
 
     init_config(args.config)
     _run_preflight_checks()

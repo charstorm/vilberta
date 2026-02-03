@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Project Overview
-Vilberta is an interactive voice assistant that provides real-time voice interaction with LLMs. It features speech-to-text, streaming text-to-speech, interruption handling, and multimodal output. The codebase follows Python best practices with a focus on async/await patterns, type hints, and modular architecture.
+Vilberta is an interactive voice assistant that provides real-time voice interaction with LLMs. It features speech-to-text, text-to-speech, interruption handling, and multimodal output. The codebase follows Python best practices with a focus on type hints, modular architecture, and simple non-streaming LLM responses for lower latency.
 
 
 ## Code Style Guidelines
@@ -38,11 +38,12 @@ Core application modules:
 - `__init__.py` - Package initialization
 - `__main__.py` - Entry point (`python -m vilberta`)
 - `main.py` - Main application logic, voice loop, preflight checks, boot sequence
-- `config.py` - Configuration constants (API, audio, VAD, TTS settings) and dataclasses
+- `config.py` - Configuration constants (API, audio, VAD, TTS settings), dataclasses (Section, SectionType), and shared types
 - `audio_capture.py` - Audio recording with Silero VAD, audio-to-base64 conversion
-- `llm_service.py` - OpenRouter LLM client, streaming responses, conversation history management
-- `response_parser.py` - Parser for LLM response sections (speak/text/transcript tags)
-- `text_section_splitter.py` - Generic streaming text section splitter with inner delimiters
+- `llm_service.py` - OpenRouter LLM client, non-streaming responses, conversation history management. Contains `_parse_response()` for parsing tagged LLM output
+- `mcp_service.py` - MCP (Model Context Protocol) service for tool calling. Connects to MCP server, manages tool execution loop
+- `mcp_llm_service.py` - Wrapper around MCPService providing sync interface for basic LLM service compatibility
+- `text_section_splitter.py` - Generic streaming text section splitter with inner delimiters. Used by llm_service and mcp_service for parsing tagged responses
 - `tts_engine.py` - Text-to-speech engine using pocket-tts with interruption support
 - `interrupt_monitor.py` - Monitors microphone during TTS playback for user interruptions
 - `sound_effects.py` - Sound effect playback (WAV files from sounds/)
@@ -52,7 +53,8 @@ Core application modules:
 - `tui.py` - Textual-based terminal UI with three-panel layout (system, conversation, events). Optional, requires textual package
 
 Subdirectories:
-- `prompts/system.md` - System prompt defining response format for LLM
+- `prompts/system.md` - System prompt defining response format for LLM (speak/text/transcript tags)
+- `prompts/system_mcp.md` - System prompt for MCP mode with tool calling
 - `sounds/` - Sound effect WAV files (ready.wav, response_send.wav, etc.)
 
 ### docs/
@@ -60,4 +62,20 @@ Subdirectories:
 
 ### tmp/
 Temporary files (logs, chat history, todo lists). Ignore files here.
+
+
+## Key Architecture Notes
+
+### LLM Response Format
+The assistant responds with tagged sections:
+- `[speak]...[/speak]` - Spoken responses (text-to-speech)
+- `[text]...[/text]` - Text-only responses (no TTS)
+- `[transcript]...[/transcript]` - User transcript extracted from audio
+
+### Modes
+- **Basic mode**: Direct LLM interaction without tools (uses BasicLLMService)
+- **MCP mode**: LLM with tool calling via MCP server (uses MCPAwareLLMService)
+
+### Non-Streaming Architecture
+All LLM responses are fetched as complete responses (non-streaming) for simplicity and lower perceived latency. The `_parse_response()` function in both `llm_service.py` and `mcp_service.py` uses `text_section_splitter.py` to parse tagged sections.
 

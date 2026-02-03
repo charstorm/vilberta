@@ -8,6 +8,7 @@ from openai import OpenAI
 
 from vilberta.config import get_config, Section, SectionType
 from vilberta.text_section_splitter import StreamSection, StreamTextSectionSplitter
+from vilberta.logger import get_logger
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "system.md"
 
@@ -154,6 +155,7 @@ class BasicLLMService(BaseLLMService):
         self.client = OpenAI(base_url=cfg.api_base_url, api_key=api_key)
         self.system_prompt = _load_system_prompt()
         self.history = ConversationHistory()
+        self.logger = get_logger("BasicLLMService")
 
         self._last_input_tokens = 0
         self._last_output_tokens = 0
@@ -182,9 +184,11 @@ class BasicLLMService(BaseLLMService):
         return self._last_latency_s
 
     def get_response(self, audio_b64: str) -> tuple[list[Section], str]:
+        self.logger.debug("Triggering LLM request")
         self.history.add_user_audio(audio_b64)
         messages = self.history.get_api_messages(self.system_prompt)
 
+        self.logger.debug(f"Sending request with {len(messages)} messages")
         t0 = time.monotonic()
         cfg = get_config()
         response = self.client.chat.completions.create(
@@ -194,8 +198,9 @@ class BasicLLMService(BaseLLMService):
             user="vilberta",
             temperature=0.7,
         )
-
         self._last_latency_s = time.monotonic() - t0
+
+        self.logger.info(f"LLM response received in {self._last_latency_s:.3f}s")
 
         # Extract usage metrics
         self._last_input_tokens = getattr(response.usage, "prompt_tokens", 0) or 0
@@ -205,13 +210,22 @@ class BasicLLMService(BaseLLMService):
             self._last_cache_read_tokens = getattr(detail, "cached_tokens", 0) or 0
             self._last_cache_write_tokens = getattr(detail, "audio_tokens", 0) or 0
 
+        self.logger.debug(
+            f"Tokens: input={self._last_input_tokens}, output={self._last_output_tokens}, "
+            f"cache_read={self._last_cache_read_tokens}, cache_write={self._last_cache_write_tokens}"
+        )
+
         full_response = response.choices[0].message.content or ""
+        self.logger.debug(f"Raw response length: {len(full_response)} chars")
+
         sections = _parse_response(full_response)
+        self.logger.info(f"Parsed {len(sections)} sections from response")
 
         self.history.add_assistant(full_response)
 
         transcript = self._extract_transcript(full_response)
         if transcript:
+            self.logger.debug(f"Extracted transcript: {transcript[:100]}...")
             self.history.replace_last_user_audio_with_transcript(transcript)
 
         self.history.trim_if_needed()
