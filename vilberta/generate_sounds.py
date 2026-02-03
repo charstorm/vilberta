@@ -114,6 +114,41 @@ def generate_response_end() -> None:
     _save_wav("response_end.wav", audio)
 
 
+def generate_tool_call_start() -> None:
+    # Short mechanical "processing" sound - rising beep
+    dur = 0.04
+    n = int(SAMPLE_RATE * dur)
+    env = _envelope(n, attack=n // 6, decay=n // 3)
+    freq = np.linspace(800, 1200, n)
+    phase = 2 * np.pi * np.cumsum(freq) / SAMPLE_RATE
+    audio = np.sin(phase).astype(np.float32) * 0.25 * env
+    _save_wav("tool_call_start.wav", audio)
+
+
+def generate_tool_call_success() -> None:
+    # Short ascending two-tone success chime
+    dur = 0.04
+    n = int(SAMPLE_RATE * dur)
+    t = np.linspace(0, dur, n, dtype=np.float32)
+    env = _envelope(n, attack=n // 8, decay=n // 3)
+    t1 = np.sin(2 * np.pi * 880 * t) * env * 0.25
+    t2 = np.sin(2 * np.pi * 1100 * t) * env * 0.25
+    gap = np.zeros(int(SAMPLE_RATE * 0.02), dtype=np.float32)
+    audio = np.concatenate([t1, gap, t2]).astype(np.float32)
+    _save_wav("tool_call_success.wav", audio)
+
+
+def generate_tool_call_error() -> None:
+    # Short descending low tone for error
+    dur = 0.06
+    n = int(SAMPLE_RATE * dur)
+    env = _envelope(n, attack=n // 8, decay=n // 2)
+    freq = np.linspace(400, 200, n)
+    phase = 2 * np.pi * np.cumsum(freq) / SAMPLE_RATE
+    audio = np.sin(phase).astype(np.float32) * 0.3 * env
+    _save_wav("tool_call_error.wav", audio)
+
+
 def main() -> None:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print("Generating sound effects...")
@@ -124,6 +159,9 @@ def main() -> None:
     generate_line_print()
     generate_response_end()
     generate_ready()
+    generate_tool_call_start()
+    generate_tool_call_success()
+    generate_tool_call_error()
     print("Done.")
 
 

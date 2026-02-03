@@ -1,13 +1,14 @@
+import asyncio
 import json
 import os
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from openai import OpenAI
+from openai import AsyncOpenAI
 from openai.types.chat import (
     ChatCompletionMessageParam,
     ChatCompletionMessageFunctionToolCall,
@@ -71,6 +72,9 @@ class ToolResultEvent:
     result: str
 
 
+ToolEventCallback = Callable[[ToolCallEvent | ToolResultEvent], None]
+
+
 def _load_system_prompt() -> str:
     if PROMPT_PATH.exists():
         return PROMPT_PATH.read_text(encoding="utf-8")
@@ -123,7 +127,7 @@ class MCPService:
 
         cfg = get_config()
         api_key = os.environ.get(cfg.api_key_env, "")
-        self.openai_client = OpenAI(base_url=cfg.api_base_url, api_key=api_key)
+        self.openai_client = AsyncOpenAI(base_url=cfg.api_base_url, api_key=api_key)
         self.model = cfg.model_name
 
         # Metrics from last request
@@ -158,9 +162,15 @@ class MCPService:
             self.logger.debug(f"  - {tool['function']['name']}")
 
     async def process_message(
-        self, audio_b64: str
+        self,
+        audio_b64: str,
+        event_callback: ToolEventCallback | None = None,
     ) -> tuple[list[Section], list[ToolCallEvent | ToolResultEvent]]:
         """Process user audio message through MCP tool calling loop.
+
+        Args:
+            audio_b64: Base64-encoded audio data
+            event_callback: Optional callback for real-time tool event notifications
 
         Returns:
             Tuple of (response sections, tool events)
@@ -182,8 +192,8 @@ class MCPService:
             turn_count += 1
             self.logger.debug(f"MCP turn {turn_count}: Requesting LLM response")
 
-            # Get LLM response (non-streaming)
-            completion = self.openai_client.chat.completions.create(
+            # Get LLM response (non-streaming, async)
+            completion = await self.openai_client.chat.completions.create(
                 model=self.model,
                 messages=cast(Any, [self._build_system_message()] + self.messages),
                 tools=self.available_tools,  # type: ignore
@@ -241,7 +251,10 @@ class MCPService:
                 )
 
                 self.logger.info(f"Calling tool: {tool_name}({tool_args})")
-                events.append(ToolCallEvent(tool_name=tool_name, arguments=tool_args))
+                call_event = ToolCallEvent(tool_name=tool_name, arguments=tool_args)
+                events.append(call_event)
+                if event_callback:
+                    event_callback(call_event)
 
                 result_str = await self._call_tool(tool_name, tool_args)
                 success = not result_str.startswith("Error")
@@ -249,11 +262,12 @@ class MCPService:
                 self.logger.info(f"Tool response: {tool_name} success={success}")
                 self.logger.debug(f"Tool result: {result_str[:200]}...")
 
-                events.append(
-                    ToolResultEvent(
-                        tool_name=tool_name, success=success, result=result_str
-                    )
+                result_event = ToolResultEvent(
+                    tool_name=tool_name, success=success, result=result_str
                 )
+                events.append(result_event)
+                if event_callback:
+                    event_callback(result_event)
 
                 self.messages.append(
                     cast(
@@ -273,18 +287,26 @@ class MCPService:
         return sections, events
 
     async def _call_tool(self, tool_name: str, tool_args: dict[str, Any]) -> str:
-        """Call a single tool and return result as string."""
+        """Call a single tool and return result as string.
+
+        Uses a 30-second timeout to prevent hanging on unresponsive MCP servers.
+        """
         if self.session is None:
             return "Error: Not connected to MCP server"
 
         try:
-            result = await self.session.call_tool(tool_name, tool_args)
+            result = await asyncio.wait_for(
+                self.session.call_tool(tool_name, tool_args),
+                timeout=30.0,
+            )
             tool_result_content = [
                 str(getattr(content_item, "text", ""))
                 for content_item in result.content
                 if hasattr(content_item, "text")
             ]
             return "\n".join(tool_result_content)
+        except asyncio.TimeoutError:
+            return f"Error calling tool {tool_name}: timeout after 30 seconds"
         except Exception as e:
             return f"Error calling tool {tool_name}: {str(e)}"
 

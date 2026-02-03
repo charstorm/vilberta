@@ -46,6 +46,9 @@ _EXPECTED_SOUNDS = [
     "line_print.wav",
     "response_end.wav",
     "ready.wav",
+    "tool_call_start.wav",
+    "tool_call_success.wav",
+    "tool_call_error.wav",
 ]
 
 

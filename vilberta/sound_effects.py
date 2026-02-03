@@ -55,3 +55,15 @@ def play_response_end() -> None:
 
 def play_ready() -> None:
     _play("ready.wav")
+
+
+def play_tool_call_start() -> None:
+    _play("tool_call_start.wav")
+
+
+def play_tool_call_success() -> None:
+    _play("tool_call_success.wav")
+
+
+def play_tool_call_error() -> None:
+    _play("tool_call_error.wav")
