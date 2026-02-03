@@ -154,8 +154,7 @@ class SystemPanel(Container):
             "LAST REQUEST",
             "─" * 28,
             f"Duration    {stats.audio_duration_s:.2f}s",
-            f"TTFT        {stats.ttft_s:.2f}s",
-            f"Latency     {stats.total_latency_s:.2f}s",
+            f"Latency     {stats.latency_s:.2f}s",
             f"Input       {stats.input_tokens:,}",
             f"Output      {stats.output_tokens:,}",
         ]
@@ -216,7 +215,7 @@ class SystemPanel(Container):
 
     def watch_last_stats(self, value: RequestStats | None) -> None:
         if value:
-            self.response_times.append(value.total_latency_s)
+            self.response_times.append(value.latency_s)
         self.update_stats()
         self.update_session()
 
@@ -508,7 +507,7 @@ class VilbertaTUI(App[None]):
                 system_panel.session_tokens_out += event.stats.output_tokens
 
                 events_log.write(
-                    f"STATS ttft={event.stats.ttft_s:.2f}s "
+                    f"STATS latency={event.stats.latency_s:.2f}s "
                     f"in={event.stats.input_tokens} out={event.stats.output_tokens}",
                     "event",
                 )

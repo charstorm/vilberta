@@ -9,11 +9,10 @@ from queue import Queue
 from openai import OpenAI, AuthenticationError
 
 from vilberta.audio_capture import record_speech, audio_to_base64_wav
-from vilberta.config import init_config, get_config
+from vilberta.config import init_config, get_config, SectionType
 from vilberta.interrupt_monitor import InterruptMonitor
 from vilberta.llm_service import BaseLLMService, BasicLLMService
 from vilberta.mcp_llm_service import MCPAwareLLMService
-from vilberta.response_parser import SectionType
 from vilberta.tts_engine import TTSEngine
 from vilberta.display import (
     init_display,
@@ -155,17 +154,14 @@ def _process_response(
 ) -> None:
     interrupted = False
     monitor.start()
-    first_section = True
 
     play_response_send()
-    t0 = time.monotonic()
 
     try:
-        for section in llm.stream_response(audio_b64):
-            if first_section:
-                play_response_received()
-                first_section = False
+        sections, _full_response = llm.get_response(audio_b64)
+        play_response_received()
 
+        for section in sections:
             if section.type == SectionType.SPEAK:
                 print_speak(section.content)
                 completed = _speak_with_monitor(tts, monitor, section.content)
@@ -182,8 +178,6 @@ def _process_response(
     finally:
         monitor.stop()
 
-    total_latency = time.monotonic() - t0
-
     # Emit stats
     stats = RequestStats(
         audio_duration_s=audio_duration_s,
@@ -191,8 +185,7 @@ def _process_response(
         output_tokens=llm.last_output_tokens,
         cache_read_tokens=llm.last_cache_read_tokens,
         cache_write_tokens=llm.last_cache_write_tokens,
-        ttft_s=llm.last_ttft,
-        total_latency_s=total_latency,
+        latency_s=llm.last_latency_s,
     )
     print_stats(stats)
 

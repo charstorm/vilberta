@@ -13,10 +13,44 @@ from openai.types.chat import (
     ChatCompletionMessageFunctionToolCall,
 )
 
-from vilberta.config import get_config
-from vilberta.response_parser import Section
+from vilberta.config import get_config, Section, SectionType
+from vilberta.text_section_splitter import StreamSection, StreamTextSectionSplitter
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "system_mcp.md"
+
+_TAG_SECTIONS = [
+    StreamSection("[speak]", "[/speak]", inner_split_on=["\n"]),
+    StreamSection("[text]", "[/text]", inner_split_on=None),
+    StreamSection("[transcript]", "[/transcript]", inner_split_on=None),
+]
+
+_TAG_OPEN = {
+    "[speak]": SectionType.SPEAK,
+    "[text]": SectionType.TEXT,
+    "[transcript]": SectionType.TRANSCRIPT,
+}
+
+_TAG_STRINGS = {s.starting_tag for s in _TAG_SECTIONS} | {
+    s.ending_tag for s in _TAG_SECTIONS if s.ending_tag
+}
+
+
+def _parse_response(text: str) -> list[Section]:
+    splitter = StreamTextSectionSplitter(sections=_TAG_SECTIONS)
+    parts = list(splitter.split(text))
+    parts.extend(splitter.flush())
+
+    sections: list[Section] = []
+    for part in parts:
+        if part.text in _TAG_STRINGS or part.section is None:
+            continue
+        section_type = _TAG_OPEN.get(part.section)
+        if section_type is None:
+            continue
+        content = part.text.strip()
+        if content:
+            sections.append(Section(type=section_type, content=content))
+    return sections
 
 
 @dataclass
@@ -236,19 +270,7 @@ class MCPService:
 
     def _parse_response(self, content: str) -> list[Section]:
         """Parse response into sections."""
-        from vilberta.response_parser import StreamingParser
-
-        parser = StreamingParser()
-        sections = []
-
-        for char in content:
-            for section in parser.feed(char):
-                sections.append(section)
-
-        for section in parser.flush():
-            sections.append(section)
-
-        return sections
+        return _parse_response(content)
 
     def _trim_history_if_needed(self) -> None:
         """Trim conversation history if it exceeds threshold."""

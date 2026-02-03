@@ -3,14 +3,47 @@ import time
 from abc import ABC, abstractmethod
 from typing import cast, Any
 from pathlib import Path
-from collections.abc import Generator
 
 from openai import OpenAI
 
-from vilberta.config import get_config
-from vilberta.response_parser import StreamingParser, Section
+from vilberta.config import get_config, Section, SectionType
+from vilberta.text_section_splitter import StreamSection, StreamTextSectionSplitter
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "system.md"
+
+_TAG_SECTIONS = [
+    StreamSection("[speak]", "[/speak]", inner_split_on=["\n"]),
+    StreamSection("[text]", "[/text]", inner_split_on=None),
+    StreamSection("[transcript]", "[/transcript]", inner_split_on=None),
+]
+
+_TAG_OPEN = {
+    "[speak]": SectionType.SPEAK,
+    "[text]": SectionType.TEXT,
+    "[transcript]": SectionType.TRANSCRIPT,
+}
+
+_TAG_STRINGS = {s.starting_tag for s in _TAG_SECTIONS} | {
+    s.ending_tag for s in _TAG_SECTIONS if s.ending_tag
+}
+
+
+def _parse_response(text: str) -> list[Section]:
+    splitter = StreamTextSectionSplitter(sections=_TAG_SECTIONS)
+    parts = list(splitter.split(text))
+    parts.extend(splitter.flush())
+
+    sections: list[Section] = []
+    for part in parts:
+        if part.text in _TAG_STRINGS or part.section is None:
+            continue
+        section_type = _TAG_OPEN.get(part.section)
+        if section_type is None:
+            continue
+        content = part.text.strip()
+        if content:
+            sections.append(Section(type=section_type, content=content))
+    return sections
 
 
 def _load_system_prompt() -> str:
@@ -69,10 +102,10 @@ class BaseLLMService(ABC):
     """Abstract base class for LLM services."""
 
     @abstractmethod
-    def stream_response(self, audio_b64: str) -> Generator[Section, None, str]:
-        """Stream response sections from LLM.
+    def get_response(self, audio_b64: str) -> tuple[list[Section], str]:
+        """Get response from LLM.
 
-        Yields Section objects and returns full response string.
+        Returns list of parsed sections and the full response string.
         """
         ...
 
@@ -107,13 +140,13 @@ class BaseLLMService(ABC):
 
     @property
     @abstractmethod
-    def last_ttft(self) -> float:
-        """Time to first token from last request."""
+    def last_latency_s(self) -> float:
+        """Total latency of last request in seconds."""
         ...
 
 
 class BasicLLMService(BaseLLMService):
-    """Basic LLM service with streaming responses (no tool calling)."""
+    """Basic LLM service with non-streaming responses (no tool calling)."""
 
     def __init__(self) -> None:
         cfg = get_config()
@@ -122,12 +155,11 @@ class BasicLLMService(BaseLLMService):
         self.system_prompt = _load_system_prompt()
         self.history = ConversationHistory()
 
-        # Metrics from last request
         self._last_input_tokens = 0
         self._last_output_tokens = 0
         self._last_cache_read_tokens = 0
         self._last_cache_write_tokens = 0
-        self._last_ttft = 0.0
+        self._last_latency_s = 0.0
 
     @property
     def last_input_tokens(self) -> int:
@@ -146,62 +178,35 @@ class BasicLLMService(BaseLLMService):
         return self._last_cache_write_tokens
 
     @property
-    def last_ttft(self) -> float:
-        return self._last_ttft
+    def last_latency_s(self) -> float:
+        return self._last_latency_s
 
-    def stream_response(self, audio_b64: str) -> Generator[Section, None, str]:
+    def get_response(self, audio_b64: str) -> tuple[list[Section], str]:
         self.history.add_user_audio(audio_b64)
         messages = self.history.get_api_messages(self.system_prompt)
 
         t0 = time.monotonic()
         cfg = get_config()
-        stream = self.client.chat.completions.create(
+        response = self.client.chat.completions.create(
             model=cfg.model_name,
             messages=cast(Any, messages),
-            stream=True,
-            stream_options={"include_usage": True},
+            stream=False,
             user="vilberta",
             temperature=0.7,
         )
 
-        parser = StreamingParser()
-        full_response = ""
-        first_token = True
+        self._last_latency_s = time.monotonic() - t0
 
-        # Reset metrics
-        self._last_input_tokens = 0
-        self._last_output_tokens = 0
-        self._last_cache_read_tokens = 0
-        self._last_cache_write_tokens = 0
-        self._last_ttft = 0.0
+        # Extract usage metrics
+        self._last_input_tokens = getattr(response.usage, "prompt_tokens", 0) or 0
+        self._last_output_tokens = getattr(response.usage, "completion_tokens", 0) or 0
+        detail = getattr(response.usage, "prompt_tokens_details", None)
+        if detail:
+            self._last_cache_read_tokens = getattr(detail, "cached_tokens", 0) or 0
+            self._last_cache_write_tokens = getattr(detail, "audio_tokens", 0) or 0
 
-        for chunk in stream:
-            # Extract usage from the final chunk
-            if hasattr(chunk, "usage") and chunk.usage is not None:
-                self._last_input_tokens = getattr(chunk.usage, "prompt_tokens", 0) or 0
-                self._last_output_tokens = (
-                    getattr(chunk.usage, "completion_tokens", 0) or 0
-                )
-                # OpenRouter / some providers expose cache info
-                detail = getattr(chunk.usage, "prompt_tokens_details", None)
-                if detail:
-                    self._last_cache_read_tokens = (
-                        getattr(detail, "cached_tokens", 0) or 0
-                    )
-                    self._last_cache_write_tokens = (
-                        getattr(detail, "audio_tokens", 0) or 0
-                    )
-
-            delta = chunk.choices[0].delta if chunk.choices else None
-            if delta and delta.content:
-                if first_token:
-                    self._last_ttft = time.monotonic() - t0
-                    first_token = False
-                text = delta.content
-                full_response += text
-                yield from parser.feed(text)
-
-        yield from parser.flush()
+        full_response = response.choices[0].message.content or ""
+        sections = _parse_response(full_response)
 
         self.history.add_assistant(full_response)
 
@@ -211,7 +216,7 @@ class BasicLLMService(BaseLLMService):
 
         self.history.trim_if_needed()
 
-        return full_response
+        return sections, full_response
 
     def mark_interrupted(self) -> None:
         if not self.history.messages:

@@ -15,8 +15,7 @@ class RequestStats:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
-    ttft_s: float = 0.0
-    total_latency_s: float = 0.0
+    latency_s: float = 0.0
     cost_usd: float = 0.0
 
 

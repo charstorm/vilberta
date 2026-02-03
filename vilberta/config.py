@@ -1,9 +1,23 @@
 from dataclasses import dataclass, field
 from collections import deque
+from enum import Enum
 from pathlib import Path
+import tomllib
 
 import numpy as np
 from numpy.typing import NDArray
+
+
+class SectionType(Enum):
+    SPEAK = "speak"
+    TEXT = "text"
+    TRANSCRIPT = "transcript"
+
+
+@dataclass
+class Section:
+    type: SectionType
+    content: str
 
 
 @dataclass
@@ -54,8 +68,6 @@ class Config:
             return cls()
 
         try:
-            import tomllib  # type: ignore[import-not-found]
-
             with open(path, "rb") as f:
                 data = tomllib.load(f)
         except Exception:
