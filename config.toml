@@ -1,0 +1,15 @@
+# Vilberta Configuration File
+# Place this file in the working directory or specify with -c config.toml
+
+[LLM_API]
+api_base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+model_name = "google/gemini-2.5-flash"
+
+[TTS]
+# Supported voices: alba, marius, javert, jean, fantine, cosette, eponine, azelma
+tts_voice = "fantine"
+
+[CHAT]
+max_hist_threshold_size = 16
+hist_reset_size = 8

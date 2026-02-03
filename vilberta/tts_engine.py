@@ -8,7 +8,7 @@ torch.backends.nnpack.enabled = False  # type: ignore[attr-defined]  # noqa: E40
 
 from pocket_tts import TTSModel  # noqa: E402
 
-from vilberta.config import TTS_VOICE, TTS_SPEED_FACTOR  # noqa: E402
+from vilberta.config import get_config  # noqa: E402
 
 FADE_SAMPLES = 64
 
@@ -25,8 +25,9 @@ def _apply_fade(audio: np.ndarray) -> np.ndarray:
 
 class TTSEngine:
     def __init__(self) -> None:
+        cfg = get_config()
         self.model = TTSModel.load_model()
-        self.voice_state = self.model.get_state_for_audio_prompt(TTS_VOICE)
+        self.voice_state = self.model.get_state_for_audio_prompt(cfg.tts_voice)
         self._interrupted = False
 
     def interrupt(self) -> None:
@@ -34,9 +35,10 @@ class TTSEngine:
 
     def speak(self, text: str) -> bool:
         """Speak a single line of text. Returns True if completed, False if interrupted."""
+        cfg = get_config()
         self._interrupted = False
         original_rate = self.model.sample_rate
-        playback_rate = int(original_rate / TTS_SPEED_FACTOR)
+        playback_rate = int(original_rate / cfg.tts_speed_factor)
 
         with sd.OutputStream(
             samplerate=playback_rate, channels=1, dtype="float32"
@@ -45,7 +47,7 @@ class TTSEngine:
                 if self._interrupted:
                     return False
                 audio_np = chunk.numpy().astype(np.float32)
-                if TTS_SPEED_FACTOR != 1.0:
+                if cfg.tts_speed_factor != 1.0:
                     num_samples = int(len(audio_np) * playback_rate / original_rate)
                     audio_np = scipy_signal.resample(audio_np, num_samples)
                 audio_np = _apply_fade(audio_np)

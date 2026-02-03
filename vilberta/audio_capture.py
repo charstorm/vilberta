@@ -9,13 +9,10 @@ from numpy.typing import NDArray
 from pysilero_vad import SileroVoiceActivityDetector
 
 from vilberta.config import (
-    SAMPLE_RATE,
-    CHANNELS,
-    CHUNK_SIZE,
-    DTYPE,
     VADConfig,
     AudioState,
     create_vad_config,
+    get_config,
 )
 from vilberta.display import print_vad
 
@@ -28,7 +25,8 @@ class VADProcessor:
         self.config = config
 
     def is_speech(self, audio_chunk: NDArray[np.int16]) -> bool:
-        if len(audio_chunk) != CHUNK_SIZE:
+        cfg = get_config()
+        if len(audio_chunk) != cfg.chunk_size:
             return False
         audio_bytes = audio_chunk.astype(np.int16).tobytes()
         if len(audio_bytes) != self.detector.chunk_bytes():
@@ -88,11 +86,12 @@ class AudioStreamHandler:
 
 
 def audio_to_base64_wav(audio_data: NDArray[np.int16]) -> str:
+    cfg = get_config()
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as wf:
-        wf.setnchannels(CHANNELS)
+        wf.setnchannels(cfg.channels)
         wf.setsampwidth(2)
-        wf.setframerate(SAMPLE_RATE)
+        wf.setframerate(cfg.sample_rate)
         wf.writeframes(audio_data.tobytes())
     buffer.seek(0)
     return base64.b64encode(buffer.read()).decode("utf-8")
@@ -101,6 +100,7 @@ def audio_to_base64_wav(audio_data: NDArray[np.int16]) -> str:
 def record_speech(
     prefix_audio: NDArray[np.int16] | None = None,
 ) -> NDArray[np.int16] | None:
+    cfg = get_config()
     detector = SileroVoiceActivityDetector()
     config = create_vad_config()
     vad = VADProcessor(detector, config)
@@ -109,14 +109,14 @@ def record_speech(
     if prefix_audio is not None:
         handler.state.start_speech()
         handler.state.speech_buffer.append(prefix_audio)
-        handler.state.speech_chunks = len(prefix_audio) // CHUNK_SIZE
+        handler.state.speech_chunks = len(prefix_audio) // cfg.chunk_size
         print_vad(up=True)
 
     stream = sd.InputStream(
-        samplerate=SAMPLE_RATE,
-        channels=CHANNELS,
-        dtype=DTYPE,
-        blocksize=CHUNK_SIZE,
+        samplerate=cfg.sample_rate,
+        channels=cfg.channels,
+        dtype=cfg.dtype,
+        blocksize=cfg.chunk_size,
         callback=handler.callback,
     )
 

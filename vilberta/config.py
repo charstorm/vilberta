@@ -1,39 +1,90 @@
 from dataclasses import dataclass, field
 from collections import deque
+from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
 
 
-# --- API ---
-API_BASE_URL = "https://openrouter.ai/api/v1"
-MODEL_NAME = "google/gemini-2.5-flash"
-# MODEL_NAME = "openai/gpt-audio-mini"
-API_KEY_ENV = "OPENROUTER_API_KEY"
+@dataclass
+class Config:
+    # LLM API settings
+    api_base_url: str = "https://openrouter.ai/api/v1"
+    api_key_env: str = "OPENROUTER_API_KEY"
+    model_name: str = "google/gemini-2.5-flash"
 
-# --- Audio ---
-SAMPLE_RATE = 16000
-CHANNELS = 1
-CHUNK_SIZE = 512
-DTYPE = np.int16
+    # Audio settings
+    sample_rate: int = 16000
+    channels: int = 1
+    chunk_size: int = 512
+    dtype: type = np.int16
 
-# --- VAD ---
-VAD_THRESHOLD = 0.5
-MIN_SPEECH_DURATION_MS = 300
-MIN_SILENCE_DURATION_MS = 1200
-SPEECH_PAD_MS = 300
-MAX_SPEECH_DURATION_SEC = 300
+    # VAD settings
+    vad_threshold: float = 0.5
+    min_speech_duration_ms: int = 300
+    min_silence_duration_ms: int = 1200
+    speech_pad_ms: int = 300
+    max_speech_duration_sec: int = 300
 
-# --- TTS ---
-TTS_VOICE = "fantine"
-TTS_SPEED_FACTOR = 1
+    # TTS settings
+    tts_voice: str = "fantine"
+    tts_speed_factor: float = 1.0
 
-# --- History ---
-MAX_HIST_THRESHOLD_SIZE = 16
-HIST_RESET_SIZE = 8
+    # Chat/History settings
+    max_hist_threshold_size: int = 16
+    hist_reset_size: int = 8
 
-# --- Interruption ---
-INTERRUPT_SPEECH_DURATION_MS = 300
+    # Interruption settings
+    interrupt_speech_duration_ms: int = 300
+
+    @classmethod
+    def from_toml(cls, path: Path | str | None = None) -> "Config":
+        if path is None:
+            path = Path("config.toml")
+        else:
+            path = Path(path)
+
+        if not path.exists():
+            return cls()
+
+        try:
+            import tomllib  # type: ignore[import-not-found]
+
+            with open(path, "rb") as f:
+                data = tomllib.load(f)
+        except Exception:
+            return cls()
+
+        llm_api = data.get("LLM_API", {})
+        tts = data.get("TTS", {})
+        chat = data.get("CHAT", {})
+
+        return cls(
+            api_base_url=llm_api.get("api_base_url", cls.api_base_url),
+            api_key_env=llm_api.get("api_key_env", cls.api_key_env),
+            model_name=llm_api.get("model_name", cls.model_name),
+            tts_voice=tts.get("tts_voice", cls.tts_voice),
+            max_hist_threshold_size=chat.get(
+                "max_hist_threshold_size", cls.max_hist_threshold_size
+            ),
+            hist_reset_size=chat.get("hist_reset_size", cls.hist_reset_size),
+        )
+
+
+# Global config instance - initialized with defaults
+_config: Config | None = None
+
+
+def init_config(path: Path | str | None = None) -> Config:
+    global _config
+    _config = Config.from_toml(path)
+    return _config
+
+
+def get_config() -> Config:
+    if _config is None:
+        return Config()
+    return _config
 
 
 @dataclass
@@ -67,14 +118,21 @@ class AudioState:
 
 
 def create_vad_config() -> VADConfig:
+    cfg = get_config()
     return VADConfig(
-        threshold=VAD_THRESHOLD,
-        min_speech_chunks=int(MIN_SPEECH_DURATION_MS * SAMPLE_RATE / 1000 / CHUNK_SIZE),
-        min_silence_chunks=int(
-            MIN_SILENCE_DURATION_MS * SAMPLE_RATE / 1000 / CHUNK_SIZE
+        threshold=cfg.vad_threshold,
+        min_speech_chunks=int(
+            cfg.min_speech_duration_ms * cfg.sample_rate / 1000 / cfg.chunk_size
         ),
-        max_speech_chunks=int(MAX_SPEECH_DURATION_SEC * SAMPLE_RATE / CHUNK_SIZE),
-        speech_pad_chunks=int(SPEECH_PAD_MS * SAMPLE_RATE / 1000 / CHUNK_SIZE),
+        min_silence_chunks=int(
+            cfg.min_silence_duration_ms * cfg.sample_rate / 1000 / cfg.chunk_size
+        ),
+        max_speech_chunks=int(
+            cfg.max_speech_duration_sec * cfg.sample_rate / cfg.chunk_size
+        ),
+        speech_pad_chunks=int(
+            cfg.speech_pad_ms * cfg.sample_rate / 1000 / cfg.chunk_size
+        ),
     )
 
 

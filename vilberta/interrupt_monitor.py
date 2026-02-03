@@ -15,21 +15,16 @@ import sounddevice as sd
 from numpy.typing import NDArray
 from pysilero_vad import SileroVoiceActivityDetector
 
-from vilberta.config import (
-    SAMPLE_RATE,
-    CHANNELS,
-    CHUNK_SIZE,
-    VAD_THRESHOLD,
-    INTERRUPT_SPEECH_DURATION_MS,
-)
+from vilberta.config import get_config
 from vilberta.display import print_vad
 
 
 class InterruptMonitor:
     def __init__(self) -> None:
+        cfg = get_config()
         self._detector = SileroVoiceActivityDetector()
         self._confirm_chunks = int(
-            INTERRUPT_SPEECH_DURATION_MS * SAMPLE_RATE / 1000 / CHUNK_SIZE
+            cfg.interrupt_speech_duration_ms * cfg.sample_rate / 1000 / cfg.chunk_size
         )
         self._speech_chunks = 0
         self._buffered_frames: list[NDArray[np.int16]] = []
@@ -75,22 +70,24 @@ class InterruptMonitor:
             self._speech_chunks = 0
 
     def _is_speech(self, audio_chunk: NDArray[np.int16]) -> bool:
-        if len(audio_chunk) != CHUNK_SIZE:
+        cfg = get_config()
+        if len(audio_chunk) != cfg.chunk_size:
             return False
         audio_bytes = audio_chunk.astype(np.int16).tobytes()
         if len(audio_bytes) != self._detector.chunk_bytes():
             return False
-        return bool(self._detector(audio_bytes) >= VAD_THRESHOLD)
+        return bool(self._detector(audio_bytes) >= cfg.vad_threshold)
 
     def start(self) -> None:
+        cfg = get_config()
         self._triggered = False
         self._speech_chunks = 0
         self._buffered_frames = []
         self._stream = sd.InputStream(
-            samplerate=SAMPLE_RATE,
-            channels=CHANNELS,
+            samplerate=cfg.sample_rate,
+            channels=cfg.channels,
             dtype="int16",
-            blocksize=CHUNK_SIZE,
+            blocksize=cfg.chunk_size,
             callback=self._callback,
         )
         self._stream.start()

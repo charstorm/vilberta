@@ -9,7 +9,7 @@ from queue import Queue
 from openai import OpenAI, AuthenticationError
 
 from vilberta.audio_capture import record_speech, audio_to_base64_wav
-from vilberta.config import API_BASE_URL, API_KEY_ENV, MODEL_NAME, SAMPLE_RATE
+from vilberta.config import init_config, get_config
 from vilberta.interrupt_monitor import InterruptMonitor
 from vilberta.llm_service import LLMService
 from vilberta.response_parser import SectionType
@@ -54,17 +54,18 @@ _EXPECTED_SOUNDS = [
 def _run_preflight_checks() -> None:
     print("Running preflight checks...")
 
-    api_key = os.environ.get(API_KEY_ENV, "")
+    cfg = get_config()
+    api_key = os.environ.get(cfg.api_key_env, "")
     if not api_key:
-        print(f"ERROR: Environment variable {API_KEY_ENV} is not set.")
+        print(f"ERROR: Environment variable {cfg.api_key_env} is not set.")
         sys.exit(1)
 
     try:
-        client = OpenAI(base_url=API_BASE_URL, api_key=api_key)
+        client = OpenAI(base_url=cfg.api_base_url, api_key=api_key)
         client.models.list()
         print("  ✓ API key valid")
     except AuthenticationError:
-        print(f"ERROR: API key in {API_KEY_ENV} is invalid.")
+        print(f"ERROR: API key in {cfg.api_key_env} is invalid.")
         sys.exit(1)
     except Exception as e:
         print(f"  ⚠ Could not verify API key ({e}), continuing anyway")
@@ -86,17 +87,20 @@ def _run_preflight_checks() -> None:
 
 # ── Boot sequence (runs inside UI via queue) ─────────────────────────────────
 
-_BOOT_LINES = [
-    ("[ OK ] Neural link", "ONLINE"),
-    ("[ OK ] Voice matrix", "ONLINE"),
-    ("[ OK ] Audio subsystem", "ONLINE"),
-    (f"[ OK ] Model: {MODEL_NAME}", "LINKED"),
-    ("[ OK ] System", "READY"),
-]
+
+def _get_boot_lines() -> list[tuple[str, str]]:
+    cfg = get_config()
+    return [
+        ("[ OK ] Neural link", "ONLINE"),
+        ("[ OK ] Voice matrix", "ONLINE"),
+        ("[ OK ] Audio subsystem", "ONLINE"),
+        (f"[ OK ] Model: {cfg.model_name}", "LINKED"),
+        ("[ OK ] System", "READY"),
+    ]
 
 
 def _play_boot_sequence(queue: Queue[DisplayEvent]) -> None:
-    for label, status in _BOOT_LINES:
+    for label, status in _get_boot_lines():
         dots = "." * (42 - len(label) - len(status))
         queue.put(DisplayEvent(type="boot", content=f"  {label} {dots} {status}"))
         time.sleep(0.25)
@@ -199,6 +203,7 @@ def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None
     play_ready()
 
     monitor = InterruptMonitor()
+    cfg = get_config()
 
     while not shutdown_event.is_set():
         audio_data = record_speech()
@@ -206,7 +211,7 @@ def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None
             continue
 
         print_status("Processing...")
-        audio_dur = len(audio_data) / SAMPLE_RATE
+        audio_dur = len(audio_data) / cfg.sample_rate
         audio_b64 = audio_to_base64_wav(audio_data)
 
         try:
@@ -220,7 +225,7 @@ def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None
             audio_data = record_speech(prefix_audio=prefix)
             if audio_data is not None:
                 print_status("Processing...")
-                audio_dur = len(audio_data) / SAMPLE_RATE
+                audio_dur = len(audio_data) / cfg.sample_rate
                 audio_b64 = audio_to_base64_wav(audio_data)
                 try:
                     _process_response(llm, tts, monitor, audio_b64, audio_dur)
@@ -249,8 +254,16 @@ def main() -> None:
         default="cli",
         help="Interface to use: cli (default) or tui",
     )
+    parser.add_argument(
+        "-c",
+        "--config",
+        type=str,
+        default=None,
+        help="Path to config.toml file",
+    )
     args = parser.parse_args()
 
+    init_config(args.config)
     _run_preflight_checks()
 
     event_queue: Queue[DisplayEvent] = Queue()

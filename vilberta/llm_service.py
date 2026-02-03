@@ -6,13 +6,7 @@ from collections.abc import Generator
 
 from openai import OpenAI
 
-from vilberta.config import (
-    API_BASE_URL,
-    MODEL_NAME,
-    API_KEY_ENV,
-    MAX_HIST_THRESHOLD_SIZE,
-    HIST_RESET_SIZE,
-)
+from vilberta.config import get_config
 from vilberta.response_parser import StreamingParser, Section
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "system.md"
@@ -61,9 +55,10 @@ class ConversationHistory:
                 return
 
     def trim_if_needed(self) -> None:
-        if len(self.messages) <= MAX_HIST_THRESHOLD_SIZE:
+        cfg = get_config()
+        if len(self.messages) <= cfg.max_hist_threshold_size:
             return
-        self.messages = self.messages[-HIST_RESET_SIZE:]
+        self.messages = self.messages[-cfg.hist_reset_size :]
 
     def get_api_messages(self, system_prompt: str) -> list[dict[str, Any]]:
         return [{"role": "system", "content": system_prompt}] + self.messages
@@ -71,8 +66,9 @@ class ConversationHistory:
 
 class LLMService:
     def __init__(self) -> None:
-        api_key = os.environ.get(API_KEY_ENV, "")
-        self.client = OpenAI(base_url=API_BASE_URL, api_key=api_key)
+        cfg = get_config()
+        api_key = os.environ.get(cfg.api_key_env, "")
+        self.client = OpenAI(base_url=cfg.api_base_url, api_key=api_key)
         self.system_prompt = _load_system_prompt()
         self.history = ConversationHistory()
 
@@ -88,8 +84,9 @@ class LLMService:
         messages = self.history.get_api_messages(self.system_prompt)
 
         t0 = time.monotonic()
+        cfg = get_config()
         stream = self.client.chat.completions.create(
-            model=MODEL_NAME,
+            model=cfg.model_name,
             messages=cast(Any, messages),
             stream=True,
             stream_options={"include_usage": True},

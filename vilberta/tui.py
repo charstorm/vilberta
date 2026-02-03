@@ -13,7 +13,7 @@ from textual.containers import Horizontal, Vertical, Container, VerticalScroll
 from textual.widgets import Static, Footer
 from textual.reactive import reactive
 
-from vilberta.config import MODEL_NAME, TTS_VOICE, SAMPLE_RATE
+from vilberta.config import get_config
 from vilberta.display import DisplayEvent, RequestStats
 
 
@@ -132,9 +132,10 @@ class SystemPanel(Container):
         self.update_status()
 
     def update_system_info(self) -> None:
+        cfg = get_config()
         info = (
-            f"{MODEL_NAME[:30]}\n"
-            f"{TTS_VOICE} • {SAMPLE_RATE // 1000}kHz\n"
+            f"{cfg.model_name[:30]}\n"
+            f"{cfg.tts_voice} • {cfg.sample_rate // 1000}kHz\n"
             "\n"
             "AUDIO WAVEFORM"
         )
