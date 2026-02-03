@@ -3,6 +3,7 @@ import sys
 import signal
 import threading
 import time
+import argparse
 from queue import Queue
 
 from openai import OpenAI, AuthenticationError
@@ -21,6 +22,8 @@ from vilberta.display import (
     print_status,
     print_error,
     print_stats,
+    DisplayEvent,
+    RequestStats,
 )
 from vilberta.sound_effects import (
     play_response_send,
@@ -30,7 +33,8 @@ from vilberta.sound_effects import (
     play_ready,
     _SOUNDS_DIR,
 )
-from vilberta.tui import CursesTUI, DisplayEvent, RequestStats
+from vilberta.cli import SimpleCLI
+from vilberta.tui import CursesTUI
 
 
 _EXPECTED_SOUNDS = [
@@ -44,7 +48,7 @@ _EXPECTED_SOUNDS = [
 ]
 
 
-# ── Preflight (runs BEFORE curses, uses plain print via fallback) ────────────
+# ── Preflight (runs BEFORE UI, uses plain print via fallback) ────────────────
 
 
 def _run_preflight_checks() -> None:
@@ -80,7 +84,7 @@ def _run_preflight_checks() -> None:
     print("Preflight checks passed.\n")
 
 
-# ── Boot sequence (runs inside curses via queue) ─────────────────────────────
+# ── Boot sequence (runs inside UI via queue) ─────────────────────────────────
 
 _BOOT_LINES = [
     ("[ OK ] Neural link", "ONLINE"),
@@ -229,7 +233,24 @@ def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 
+def _get_ui(interface: str) -> SimpleCLI | CursesTUI:
+    """Get the appropriate UI based on user preference."""
+    if interface == "tui":
+        return CursesTUI()
+    return SimpleCLI()
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Vilberta - Voice Intelligence System")
+    parser.add_argument(
+        "-i",
+        "--interface",
+        choices=["cli", "tui"],
+        default="cli",
+        help="Interface to use: cli (default) or tui",
+    )
+    args = parser.parse_args()
+
     _run_preflight_checks()
 
     event_queue: Queue[DisplayEvent] = Queue()
@@ -243,16 +264,19 @@ def main() -> None:
     signal.signal(signal.SIGINT, _sighandler)
     signal.signal(signal.SIGTERM, _sighandler)
 
-    tui = CursesTUI()
+    ui = _get_ui(args.interface)
 
     worker_thread = threading.Thread(
         target=_worker, args=(event_queue, shutdown_event), daemon=True
     )
     worker_thread.start()
 
-    # TUI runs on main thread (curses requirement)
-    tui.run(event_queue, shutdown_event)
+    # UI runs on main thread
+    ui.run(event_queue, shutdown_event)
 
 
 if __name__ == "__main__":
     main()
+
+
+# main.py

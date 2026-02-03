@@ -5,7 +5,6 @@ from __future__ import annotations
 import threading
 import re
 from collections import deque
-from dataclasses import dataclass
 from queue import Queue, Empty
 from typing import Any
 
@@ -15,6 +14,7 @@ from textual.widgets import Static, Footer
 from textual.reactive import reactive
 
 from vilberta.config import MODEL_NAME, TTS_VOICE, SAMPLE_RATE
+from vilberta.display import DisplayEvent, RequestStats
 
 
 def parse_markdown_to_textual(text: str) -> str:
@@ -29,25 +29,6 @@ def parse_markdown_to_textual(text: str) -> str:
     text = re.sub(r"__(.+?)__", r"[underline]\1[/]", text)
 
     return text
-
-
-@dataclass
-class RequestStats:
-    audio_duration_s: float = 0.0
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_tokens: int = 0
-    cache_write_tokens: int = 0
-    ttft_s: float = 0.0
-    total_latency_s: float = 0.0
-    cost_usd: float = 0.0
-
-
-@dataclass
-class DisplayEvent:
-    type: str
-    content: str
-    stats: RequestStats | None = None
 
 
 class WaveformWidget(Static):
@@ -578,4 +559,4 @@ class CursesTUI:
         pass
 
 
-# vilberta_textual_tui.py
+# tui.py

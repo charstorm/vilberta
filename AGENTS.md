@@ -47,8 +47,9 @@ Core application modules:
 - `interrupt_monitor.py` - Monitors microphone during TTS playback for user interruptions
 - `sound_effects.py` - Sound effect playback (WAV files from sounds/)
 - `generate_sounds.py` - Generates sound effect WAV files programmatically
-- `display.py` - Display adapter that routes all output through queue to TUI
-- `tui.py` - Textual-based terminal UI with three-panel layout (system, conversation, events)
+- `display.py` - Display adapter that routes all output through queue to UI. Defines DisplayEvent and RequestStats dataclasses shared by all interfaces
+- `cli.py` - Simple CLI interface using plain print statements (no curses/textual dependencies). Default interface
+- `tui.py` - Textual-based terminal UI with three-panel layout (system, conversation, events). Optional, requires textual package
 
 Subdirectories:
 - `prompts/system.md` - System prompt defining response format for LLM
