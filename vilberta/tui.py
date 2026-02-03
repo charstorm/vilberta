@@ -20,14 +20,14 @@ from vilberta.config import MODEL_NAME, TTS_VOICE, SAMPLE_RATE
 def parse_markdown_to_textual(text: str) -> str:
     """Convert markdown formatting to Textual markup."""
     # Bold: **text** -> [bold]text[/]
-    text = re.sub(r'\*\*(.+?)\*\*', r'[bold]\1[/]', text)
-    
+    text = re.sub(r"\*\*(.+?)\*\*", r"[bold]\1[/]", text)
+
     # Italic: *text* (but not ** which was already handled)
-    text = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'[italic]\1[/]', text)
-    
+    text = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"[italic]\1[/]", text)
+
     # Underline: __text__
-    text = re.sub(r'__(.+?)__', r'[underline]\1[/]', text)
-    
+    text = re.sub(r"__(.+?)__", r"[underline]\1[/]", text)
+
     return text
 
 
@@ -91,16 +91,18 @@ class ScrollingLog(VerticalScroll):
         super().__init__(**kwargs)
         self.messages: list[tuple[str, str]] = []
 
-    def write(self, content: str, style: str = "", parse_markdown: bool = False) -> None:
+    def write(
+        self, content: str, style: str = "", parse_markdown: bool = False
+    ) -> None:
         """Add a message to the log."""
         if parse_markdown:
             content = parse_markdown_to_textual(content)
-        
+
         self.messages.append((content, style))
-        
+
         new_static = Static(content, markup=parse_markdown, classes=style)
         self.mount(new_static)
-        
+
         self.scroll_end(animate=False)
 
 
@@ -165,7 +167,7 @@ class SystemPanel(Container):
             return
 
         stats = self.last_stats
-        
+
         lines = [
             "LAST REQUEST",
             "─" * 28,
@@ -185,7 +187,7 @@ class SystemPanel(Container):
 
     def update_session(self) -> None:
         sparkline = self.create_sparkline()
-        
+
         lines = [
             "",
             "SESSION",
@@ -218,10 +220,10 @@ class SystemPanel(Container):
     def update_status(self) -> None:
         status = f"▸ {self.status_text}"
         display = f"\nSTATUS\n{status}"
-        
+
         widget = self.query_one("#status-display", Static)
         widget.update(display)
-        
+
         if "LISTEN" in self.status_text:
             widget.add_class("highlight")
         else:
@@ -281,12 +283,7 @@ class EventsPanel(Vertical):
 
     def on_mount(self) -> None:
         shortcuts = (
-            "SHORTCUTS\n"
-            "─────────\n"
-            "  q   Quit\n"
-            "  ↑↓  Scroll\n"
-            "Home  Top\n"
-            " End  Bottom"
+            "SHORTCUTS\n─────────\n  q   Quit\n  ↑↓  Scroll\nHome  Top\n End  Bottom"
         )
         widget = self.query_one("#shortcuts", Static)
         widget.update(shortcuts)
@@ -452,10 +449,14 @@ class VilbertaTUI(App[None]):
                 self.in_ai_text_block = False
 
             if not self.in_ai_voice_block:
-                conversation.write(f"🤖 > {event.content}", "ai-voice first", parse_markdown=True)
+                conversation.write(
+                    f"🤖 > {event.content}", "ai-voice first", parse_markdown=True
+                )
                 self.in_ai_voice_block = True
             else:
-                conversation.write(f"    │ {event.content}", "ai-voice", parse_markdown=True)
+                conversation.write(
+                    f"    │ {event.content}", "ai-voice", parse_markdown=True
+                )
 
             events_log.write(f"SPEAK {event.content[:30]}", "ai-voice")
 
@@ -467,7 +468,9 @@ class VilbertaTUI(App[None]):
             lines = event.content.splitlines()
             for line in lines:
                 if not self.in_ai_text_block:
-                    conversation.write(f"💬 > {line}", "ai-text first", parse_markdown=True)
+                    conversation.write(
+                        f"💬 > {line}", "ai-text first", parse_markdown=True
+                    )
                     self.in_ai_text_block = True
                 else:
                     conversation.write(f"    │ {line}", "ai-text", parse_markdown=True)
@@ -525,7 +528,7 @@ class VilbertaTUI(App[None]):
                 events_log.write(
                     f"STATS ttft={event.stats.ttft_s:.2f}s "
                     f"in={event.stats.input_tokens} out={event.stats.output_tokens}",
-                    "event"
+                    "event",
                 )
 
         elif event.type == "boot":

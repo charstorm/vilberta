@@ -3,37 +3,6 @@
 ## Project Overview
 Vilberta is an interactive voice assistant that provides real-time voice interaction with LLMs. It features speech-to-text, streaming text-to-speech, interruption handling, and multimodal output. The codebase follows Python best practices with a focus on async/await patterns, type hints, and modular architecture.
 
-## Build, Test, and Lint Commands
-
-### Linting and Formatting
-```bash
-# Lint the entire codebase
-ruff check .
-
-# Auto-fix linting issues where possible
-ruff check --fix .
-
-# Format code (assuming ruff handles formatting)
-ruff format .
-
-# Type checking with mypy (if configured)
-mypy --strict vilberta/  # ignore issues with libraries
-```
-
-### Build and Development
-```bash
-# Install development dependencies
-pip install -e ".[dev]"
-
-# Install from requirements
-pip install -r requirements.txt
-
-# Run the main application
-python -m vilberta
-
-# Run with specific options for debugging
-python -m vilberta --voice alba --speed 1.0
-```
 
 ## Code Style Guidelines
 
@@ -52,4 +21,42 @@ python -m vilberta --voice alba --speed 1.0
 - comments should handle the "why", not the "what"
 - don't mix low level code with high level code
 - produce code that is low in cognitive complexity
+
+
+## File Structure
+
+### Root Files
+- `README.md` - Project documentation and usage instructions
+- `LICENSE` - License file
+- `requirements.txt` - Python dependencies (openai, textual, pocket-tts, etc.)
+- `mypy.ini` - MyPy type checker configuration
+- `.gitignore` - Git ignore rules
+
+### vilberta/ - Main Package
+Core application modules:
+
+- `__init__.py` - Package initialization
+- `__main__.py` - Entry point (`python -m vilberta`)
+- `main.py` - Main application logic, voice loop, preflight checks, boot sequence
+- `config.py` - Configuration constants (API, audio, VAD, TTS settings) and dataclasses
+- `audio_capture.py` - Audio recording with Silero VAD, audio-to-base64 conversion
+- `llm_service.py` - OpenRouter LLM client, streaming responses, conversation history management
+- `response_parser.py` - Parser for LLM response sections (speak/text/transcript tags)
+- `text_section_splitter.py` - Generic streaming text section splitter with inner delimiters
+- `tts_engine.py` - Text-to-speech engine using pocket-tts with interruption support
+- `interrupt_monitor.py` - Monitors microphone during TTS playback for user interruptions
+- `sound_effects.py` - Sound effect playback (WAV files from sounds/)
+- `generate_sounds.py` - Generates sound effect WAV files programmatically
+- `display.py` - Display adapter that routes all output through queue to TUI
+- `tui.py` - Textual-based terminal UI with three-panel layout (system, conversation, events)
+
+Subdirectories:
+- `prompts/system.md` - System prompt defining response format for LLM
+- `sounds/` - Sound effect WAV files (ready.wav, response_send.wav, etc.)
+
+### docs/
+- `screenshot.png` - Screenshot for README
+
+### tmp/
+Temporary files (logs, chat history, todo lists). Ignore files here.
 
