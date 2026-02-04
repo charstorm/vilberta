@@ -6,7 +6,7 @@ Core Objective: **Not everything needs to be spoken**.
 
 Vilberta intelligently separates conversational responses (audio) from visual content like code, lists, and data (text), creating a more natural and efficient interaction model.
 
-<img src="docs/screenshot.png" alt="Vilberta Interface" width="600">
+<img src="docs/screenshot.png" alt="Vilberta Interface" width="800">
 
 ## Features
 
@@ -14,7 +14,7 @@ Vilberta intelligently separates conversational responses (audio) from visual co
 - **Voice Activity Detection (VAD)**: Uses Silero VAD for automatic speech detection
 - **Context-Aware Transcription**: Uses conversation history to improve accuracy for technical terms
 - **Smart Interruption Handling**: Gracefully interrupts TTS when you speak and resumes context
-- **MCP Integration**: Full support for Model Context Protocol with tool calling capabilities
+- **MCP Integration**: Support for Model Context Protocol with tool calling capabilities
 - **Multimodal Output**:
   - `[speak]`: Audio responses for conversational interaction
   - `[text]`: Visual content for code, lists, and complex information
@@ -31,8 +31,6 @@ Vilberta uses a three-stage pipeline approach instead of direct speech-to-speech
    - GPT-4o mini for basic chat
    - Gemini 2.5 Flash for tool calling with MCP
 3. **TTS (Text-to-Speech)**: Pockety TTS (runs locally)
-
-The system maintains conversation context using the last 10 messages with an intelligent pruning strategy to manage token limits.
 
 ## Installation
 
