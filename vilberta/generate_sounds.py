@@ -14,7 +14,7 @@ def _save_wav(filename: str, audio: np.ndarray) -> None:
     pad = np.zeros(int(SAMPLE_RATE * SILENCE_PAD_S), dtype=np.float32)
     audio = np.concatenate([pad, audio, pad])
     audio = np.clip(audio, -1.0, 1.0)
-    pcm = (audio * 32767).astype(np.int16)
+    pcm = (audio * 8000).astype(np.int16)
     path = os.path.join(OUTPUT_DIR, filename)
     with wave.open(path, "w") as wf:
         wf.setnchannels(1)

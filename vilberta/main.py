@@ -262,7 +262,7 @@ class _SubsystemTracker:
         print_subsystem_ready(name)
         if self._ready == self._expected:
             print_status("")
-            print_status("  ═══ All systems nominal ═══")
+            print_status(" ** All systems nominal **")
             print_status("")
 
     def is_ready(self, name: str) -> bool:
