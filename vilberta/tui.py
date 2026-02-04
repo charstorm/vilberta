@@ -371,7 +371,7 @@ class VilbertaTUI(App[None]):
                     f"   │ {event.content}", "ai-voice", parse_markdown=True
                 )
 
-            events_log.write(f"SPEAK {event.content[:30]}", "ai-voice")
+            events_log.write(f"🔊 {event.content[:35]}", "ai-voice")
 
         elif event.type == "text":
             if self.in_ai_voice_block:
@@ -388,7 +388,7 @@ class VilbertaTUI(App[None]):
                 else:
                     conversation.write(f"   │ {line}", "ai-text", parse_markdown=True)
 
-            events_log.write(f"TEXT  {event.content[:30]}", "ai-text")
+            events_log.write(f"📝 {event.content[:35]}", "ai-text")
 
         elif event.type == "transcript":
             self.end_ai_blocks(conversation)
@@ -397,7 +397,7 @@ class VilbertaTUI(App[None]):
             conversation.write("")
 
             system_panel.exchange_count += 1
-            events_log.write(f"USER  {event.content[:30]}", "user")
+            events_log.write(f"👤 {event.content[:35]}", "user")
 
         elif event.type == "status":
             msg = event.content.strip()
@@ -419,20 +419,33 @@ class VilbertaTUI(App[None]):
                     system_panel.status_text = val
                     break
 
-            events_log.write(f"STAT  {msg[:30]}", "status")
+            events_log.write(f"📋 {msg[:35]}", "status")
 
         elif event.type == "error":
             conversation.write(f"❌ > {event.content}", "error")
-            events_log.write(f"ERROR {event.content[:30]}", "error")
+            events_log.write(f"❌ {event.content[:35]}", "error")
 
         elif event.type == "vad":
             system_panel.vad_active = event.content == "up"
             status = "▲ speech" if event.content == "up" else "▼ silence"
             style = "vad-active" if event.content == "up" else "vad-inactive"
-            events_log.write(f"VAD   {status}", style)
+            icon = "🎤" if event.content == "up" else "🔇"
+            events_log.write(f"{icon} {status}", style)
 
         elif event.type == "boot":
-            events_log.write(f"BOOT  {event.content.strip()[:30]}", "event")
+            events_log.write(f"🚀 {event.content.strip()[:35]}", "event")
+
+        elif event.type == "tool_call":
+            events_log.write(f"🔧 {event.content[:35]}", "event")
+
+        elif event.type == "tool_result":
+            parts = event.content.split("|", 2)
+            if len(parts) >= 2:
+                tool_name, status = parts[0], parts[1]
+                icon = "✅" if status == "OK" else "❌"
+                events_log.write(f"{icon} {tool_name}", "event" if status == "OK" else "error")
+            else:
+                events_log.write(f"🔧 {event.content[:35]}", "event")
 
     def end_ai_blocks(self, conversation: ScrollingLog) -> None:
         if self.in_ai_voice_block or self.in_ai_text_block:

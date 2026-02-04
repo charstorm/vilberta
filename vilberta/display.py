@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from queue import Queue
+from typing import Any
 
 
 @dataclass
@@ -51,6 +52,16 @@ def print_error(message: str) -> None:
 
 def print_vad(*, up: bool) -> None:
     _emit("vad", "up" if up else "down")
+
+
+def print_tool_call(tool_name: str, arguments: dict[str, Any]) -> None:
+    args_str = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
+    _emit("tool_call", f"{tool_name}({args_str})")
+
+
+def print_tool_result(tool_name: str, success: bool, result: str) -> None:
+    status = "OK" if success else "ERR"
+    _emit("tool_result", f"{tool_name}|{status}|{result}")
 
 
 # display.py

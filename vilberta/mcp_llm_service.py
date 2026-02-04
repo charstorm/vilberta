@@ -7,12 +7,8 @@ from typing import Any
 from vilberta.config import get_config, Section
 from vilberta.llm_service import BaseLLMService
 from vilberta.mcp_service import MCPService, ToolCallEvent, ToolResultEvent
-from vilberta.display import print_status
-from vilberta.sound_effects import (
-    play_tool_call_start,
-    play_tool_call_success,
-    play_tool_call_error,
-)
+from vilberta.display import print_status, print_tool_call, print_tool_result
+from vilberta.sound_effects import play_tool_call_start
 
 
 @dataclass
@@ -132,26 +128,10 @@ class MCPAwareLLMService(BaseLLMService):
             if isinstance(event, ToolCallEvent):
                 active_tool = event.tool_name
                 play_tool_call_start()
-                args_str = self._format_tool_args(event.arguments)
-                print_status(f"⚡ Calling {event.tool_name}({args_str})")
+                print_tool_call(event.tool_name, event.arguments)
             elif isinstance(event, ToolResultEvent):
                 active_tool = None
-                if event.success:
-                    play_tool_call_success()
-                    result = (
-                        event.result[:24] + "..."
-                        if len(event.result) > 24
-                        else event.result
-                    )
-                    print_status(f"✓ {event.tool_name} returned: {result}")
-                else:
-                    play_tool_call_error()
-                    error = (
-                        event.result[:24] + "..."
-                        if len(event.result) > 24
-                        else event.result
-                    )
-                    print_status(f"✗ {event.tool_name} failed: {error}")
+                print_tool_result(event.tool_name, event.success, event.result)
 
         # Start spinner thread
         spinner_thread = threading.Thread(target=_spinner_worker, daemon=True)

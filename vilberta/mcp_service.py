@@ -306,7 +306,14 @@ class MCPService:
             f"- {tool['function']['name']}: {tool['function']['description']}"
             for tool in self.available_tools
         )
-        content = f"{self.system_prompt}\n\nAvailable tools:\n{tool_descriptions}"
+        content = (
+            f"{self.system_prompt}\n\n"
+            f"IMPORTANT: You have access to external tools listed below. "
+            f"When the user asks a question that can be answered by a tool, "
+            f"you MUST use the tool calling API - do NOT provide the answer yourself. "
+            f"Only respond directly without tools for greetings, opinions, or conversation.\n\n"
+            f"Available tools:\n{tool_descriptions}"
+        )
         return {"role": "system", "content": content}
 
     def _parse_response(self, content: str) -> list[Section]:
