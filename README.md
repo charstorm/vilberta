@@ -1,22 +1,38 @@
 # Vilberta
 
-An interactive voice assistant powered by LLMs, featuring real-time speech-to-text, streaming text-to-speech, intelligent interruption handling, and multimodal output modes.
+An interactive voice assistant powered by LLMs, featuring a three-stage ASR + LLM + TTS pipeline, intelligent interruption handling, and MCP support for tool calling.
 
-<img src="docs/screenshot.png" alt="Alt text" width="600">
+Core Objective: **Not everything needs to be spoken**. 
+
+Vilberta intelligently separates conversational responses (audio) from visual content like code, lists, and data (text), creating a more natural and efficient interaction model.
+
+<img src="docs/screenshot.png" alt="Vilberta Interface" width="600">
 
 ## Features
 
-- **Real-time Voice Interaction**: Bidirectional audio communication with low-latency processing
+- **Voice Interaction**: Bidirectional audio communication with hands-free operation
 - **Voice Activity Detection (VAD)**: Uses Silero VAD for automatic speech detection
-- **Streaming TTS**: Real-time speech synthesis with customizable voice and speed
+- **Context-Aware Transcription**: Uses conversation history to improve accuracy for technical terms
 - **Smart Interruption Handling**: Gracefully interrupts TTS when you speak and resumes context
+- **MCP Integration**: Full support for Model Context Protocol with tool calling capabilities
 - **Multimodal Output**:
   - `[speak]`: Audio responses for conversational interaction
   - `[text]`: Visual content for code, lists, and complex information
-  - `[transcript]`: Confirmation of your input
 - **Audio Feedback**: Sound effects for user events and system states
-- **Persistent Conversation**: Maintains history across interactions
-- **Rich Terminal Interface**: Colored output with status indicators and progress bars
+- **Rich Terminal Interface**: Basic CLI and TUI (Text User Interface) options
+
+## Architecture
+
+Vilberta uses a three-stage pipeline approach instead of direct speech-to-speech models. This design choice was made because multimodal models currently have poor tool calling capabilities, which are essential for practical applications.
+
+**Pipeline stages:**
+1. **ASR (Automatic Speech Recognition)**: Gemini 2.5 Flash (transcription only)
+2. **LLM (Large Language Model)**: 
+   - GPT-4o mini for basic chat
+   - Gemini 2.5 Flash for tool calling with MCP
+3. **TTS (Text-to-Speech)**: Pockety TTS (runs locally)
+
+The system maintains conversation context using the last 10 messages with an intelligent pruning strategy to manage token limits.
 
 ## Installation
 
@@ -29,7 +45,7 @@ cd vilberta
 2. Create and activate a virtual environment:
 ```bash
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
 ```
 
 3. Install dependencies:
@@ -42,46 +58,49 @@ pip install -r requirements.txt
 export OPENROUTER_API_KEY="your-openrouter-api-key"
 ```
 
-See `vilberta/config.py` if you want to change more.
+## Configuration
+
+Vilberta can be configured via `config.toml`. Key settings include:
+
+- **Mode**: `basic` (simple chat) or `mcp` (with tool calling support)
+- **Models**: Configure ASR, chat, and tool calling models separately
+- **TTS Voice**: Choose from available voices (alba, marius, javert, jean, fantine, cosette, eponine, azelma)
+- **Context Management**: Adjust history size and pruning thresholds
+
+See `config.toml` for detailed configuration options.
 
 ## Usage
 
-Start the voice assistant:
+Start the voice assistant with TUI interface:
 
 ```bash
-python -m vilberta
+python -m vilberta -i tui
 ```
 
-The system will:
-1. Initialize audio components and LLM service
-2. Display a ready prompt
-3. Begin listening for voice input
+Start with basic CLI interface:
 
-Speak naturally and the assistant will respond both audibly and visually. Press `Ctrl+C` to exit at any time.
+```bash
+python -m vilberta -i cli
+```
 
-## How It Works
+### Operating Modes
 
-### Conversation Flow
+- **Basic Chat Mode**: Simple conversational interaction with the LLM
+- **MCP Mode**: Full tool calling capabilities with MCP server integration
 
-1. **Recording**: VAD detects speech and records until you stop speaking
-2. **Transcription**: Audio is sent to the LLM which transcribes it
-3. **Response Streaming**: The LLM streams back a response with special tags:
-   - `[transcript]What you said[/transcript]`
-   - `[speak]Spoken response[/speak]`
-   - `[text]On-screen content[/text]`
-4. **TTS Playback**: Speak sections are played aloud while monitoring for interruptions
-5. **Text Display**: Text sections are printed to the terminal
+Configure the mode in `config.toml` before starting the application.
 
-### Interruption Handling
+## Known Issues
 
-If you speak during TTS playback:
-- The TTS immediately stops
-- The buffered audio is prepended to the next recording
-- The conversation continues naturally
+- **Sound Effect Timing**: Sound effects may occasionally overlap with TTS output, creating jarring transitions. The current implementation has more sound effects than necessary.
+- **NNPACK Warnings**: You may see `Could not initialize NNPACK! Reason: Unsupported hardware` warnings on startup. These are typically harmless and restarting the application usually resolves them.
+- **TTS Hang**: The application may hang if exited (q for quit) during TTS playback of an utterance. Wait for the end of TTS to quit.
 
-## Acknowledgments
+## Technical Notes
 
-- **LLM**: Powered by Google's Gemini models via OpenRouter
-- **TTS**: pocket-tts for fast, local speech synthesis
-- **VAD**: Silero VAD for reliable voice detection
-- **Audio**: SoundDevice and SciPy for audio processing
+- Currently supports OpenRouter API, but can be extended to work with any OpenAI-compatible API provider
+- The three-stage architecture ensures robust tool calling while maintaining conversational quality
+
+## Contributing
+
+Vibe-coded PRs are encouraged! Just make sure to test your changes before submitting.

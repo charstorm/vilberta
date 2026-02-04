@@ -3,8 +3,8 @@
 
 [GENERAL]
 # Mode: "basic" or "mcp"
-# mode = "basic"
-mode = "mcp"
+mode = "basic"
+# mode = "mcp"
 
 [LLM_API]
 api_base_url = "https://openrouter.ai/api/v1"
