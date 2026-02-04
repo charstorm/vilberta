@@ -334,6 +334,8 @@ class VilbertaTUI(App[None]):
         self.query_one("#conversation-panel").border_title = "CONVERSATION"
         self.query_one("#events-panel").border_title = "EVENTS"
 
+        self.theme = "gruvbox"
+
         self.set_interval(1 / 30, self.process_events)
 
     def process_events(self) -> None:
