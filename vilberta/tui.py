@@ -270,7 +270,7 @@ class VilbertaTUI(App[None]):
     }
     
     .ai-text {
-        color: $secondary;
+        color: $foreground;
     }
     
     .ai-text.first {
@@ -368,7 +368,7 @@ class VilbertaTUI(App[None]):
                 self.in_ai_voice_block = True
             else:
                 conversation.write(
-                    f"    │ {event.content}", "ai-voice", parse_markdown=True
+                    f"   │ {event.content}", "ai-voice", parse_markdown=True
                 )
 
             events_log.write(f"SPEAK {event.content[:30]}", "ai-voice")
@@ -386,7 +386,7 @@ class VilbertaTUI(App[None]):
                     )
                     self.in_ai_text_block = True
                 else:
-                    conversation.write(f"    │ {line}", "ai-text", parse_markdown=True)
+                    conversation.write(f"   │ {line}", "ai-text", parse_markdown=True)
 
             events_log.write(f"TEXT  {event.content[:30]}", "ai-text")
 

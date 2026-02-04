@@ -185,6 +185,7 @@ class MCPService:
             completion = await self.openai_client.chat.completions.create(
                 model=self.model,
                 messages=cast(Any, [self._build_system_message()] + self.messages),
+                user="vilberta",
                 tools=self.available_tools,  # type: ignore
             )
 
