@@ -225,10 +225,11 @@ def _process_turn(
     audio_dur = len(audio_data) / cfg.sample_rate
     audio_b64 = audio_to_base64_wav(audio_data)
 
-    # Step 1: ASR - Transcribe audio
+    # Step 1: ASR - Transcribe audio with context from conversation history
     print_status("Transcribing...")
     try:
-        transcript, asr_stats = asr.transcribe(audio_b64, audio_dur)
+        context_words = llm.get_unique_words(max_words=100)
+        transcript, asr_stats = asr.transcribe(audio_b64, audio_dur, context_words)
     except Exception as e:
         print_error(f"ASR error: {e}")
         return

@@ -76,6 +76,33 @@ class ConversationHistory:
     def get_api_messages(self, system_prompt: str) -> list[dict[str, Any]]:
         return [{"role": "system", "content": system_prompt}] + self.messages
 
+    def get_unique_words(self, max_words: int = 100) -> list[str]:
+        """Extract unique words from user and assistant messages for ASR context.
+
+        Only considers messages with role 'user' or 'assistant' (excludes tool calls).
+        Returns sorted list of unique words, limited to max_words.
+        """
+        words: set[str] = set()
+
+        for msg in self.messages:
+            role = msg.get("role", "")
+            if role not in ("user", "assistant"):
+                continue
+
+            content = msg.get("content", "")
+            if not isinstance(content, str):
+                continue
+
+            # Extract words (alphanumeric, 2+ chars)
+            import re
+
+            found = re.findall(r"\b[a-zA-Z]{2,}\b", content.lower())
+            words.update(found)
+
+        # Sort alphabetically and limit
+        sorted_words = sorted(words)
+        return sorted_words[:max_words]
+
 
 class BaseLLMService(ABC):
     """Abstract base class for LLM services."""
@@ -124,6 +151,11 @@ class BaseLLMService(ABC):
     @abstractmethod
     def last_latency_s(self) -> float:
         """Total latency of last request in seconds."""
+        ...
+
+    @abstractmethod
+    def get_unique_words(self, max_words: int = 100) -> list[str]:
+        """Extract unique words from conversation history for ASR context."""
         ...
 
 
@@ -213,6 +245,10 @@ class BasicLLMService(BaseLLMService):
         last = self.history.messages[-1]
         if last["role"] == "assistant" and isinstance(last["content"], str):
             last["content"] = last["content"] + "\n[interrupted by user]"
+
+    def get_unique_words(self, max_words: int = 100) -> list[str]:
+        """Extract unique words from conversation history for ASR context."""
+        return self.history.get_unique_words(max_words)
 
 
 # Keep alias for backward compatibility

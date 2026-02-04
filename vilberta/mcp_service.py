@@ -337,6 +337,33 @@ class MCPService:
             if isinstance(content, str):
                 last["content"] = content + "\n[interrupted by user]"
 
+    def get_unique_words(self, max_words: int = 100) -> list[str]:
+        """Extract unique words from user and assistant messages for ASR context.
+
+        Only considers messages with role 'user' or 'assistant' (excludes tool calls).
+        Returns sorted list of unique words, limited to max_words.
+        """
+        import re
+
+        words: set[str] = set()
+
+        for msg in self.messages:
+            role = msg.get("role", "")
+            if role not in ("user", "assistant"):
+                continue
+
+            content = msg.get("content", "")
+            if not isinstance(content, str):
+                continue
+
+            # Extract words (alphanumeric, 2+ chars)
+            found = re.findall(r"\b[a-zA-Z]{2,}\b", content.lower())
+            words.update(found)
+
+        # Sort alphabetically and limit
+        sorted_words = sorted(words)
+        return sorted_words[:max_words]
+
     async def cleanup(self) -> None:
         """Close MCP connection."""
         self.logger.info("Closing MCP connection")
