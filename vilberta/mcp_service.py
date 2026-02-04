@@ -17,8 +17,28 @@ from openai.types.chat import (
 from vilberta.config import get_config, Section, SectionType
 from vilberta.text_section_splitter import StreamSection, StreamTextSectionSplitter
 from vilberta.logger import get_logger
+from vilberta.history_pruner import prune_turns
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "system_mcp.md"
+
+_INFORM_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "inform_user_about_toolcall",
+        "description": "Inform the user that tool calls are being executed. When you need to use tools, you MUST call this tool FIRST, in parallel with other tool calls. Keep the message short (max 12 words) and conversational.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "Short message to speak to the user (max 12 words)",
+                    "maxLength": 100,
+                }
+            },
+            "required": ["message"],
+        },
+    },
+}
 
 _TAG_SECTIONS = [
     StreamSection("[speak]", "[/speak]", inner_split_on=["\n"]),
@@ -70,7 +90,26 @@ class ToolResultEvent:
     result: str
 
 
-ToolEventCallback = Callable[[ToolCallEvent | ToolResultEvent], None]
+@dataclass
+class InformUserEvent:
+    """Event emitted when inform_user_about_toolcall is triggered"""
+
+    message: str
+
+
+@dataclass
+class PruningEvent:
+    """Event emitted when conversation history is pruned"""
+
+    turns_pruned: int
+    tools_redacted: int
+    original_turn_count: int
+    final_turn_count: int
+
+
+ToolEventCallback = Callable[
+    [ToolCallEvent | ToolResultEvent | InformUserEvent | PruningEvent], None
+]
 
 
 def _load_system_prompt() -> str:
@@ -186,7 +225,9 @@ class MCPService:
                 model=self.model,
                 messages=cast(Any, [self._build_system_message()] + self.messages),
                 user="vilberta",
-                tools=self.available_tools,  # type: ignore
+                tools=self.available_tools + [_INFORM_TOOL],  # type: ignore
+                tool_choice="auto",
+                parallel_tool_calls=True,
             )
 
             self.logger.info(f"LLM response received (turn {turn_count})")
@@ -225,14 +266,39 @@ class MCPService:
             tool_call_count = len(assistant_message.tool_calls)
             self.logger.info(f"LLM requested {tool_call_count} tool calls")
 
-            for tool_call in assistant_message.tool_calls:
-                if self._interrupted:
-                    self.logger.debug("Tool execution interrupted")
-                    break
+            if self._interrupted:
+                self.logger.debug("Tool execution interrupted before start")
+                break
 
+            # Separate inform tool from other tools
+            inform_call = None
+            other_calls = []
+            for tool_call in assistant_message.tool_calls:
                 if not isinstance(tool_call, ChatCompletionMessageFunctionToolCall):
                     continue
+                if tool_call.function.name == "inform_user_about_toolcall":
+                    inform_call = tool_call
+                else:
+                    other_calls.append(tool_call)
 
+            # Handle inform tool first - emit event for TTS
+            if inform_call:
+                tool_args = (
+                    json.loads(inform_call.function.arguments)
+                    if inform_call.function.arguments
+                    else {}
+                )
+                message = tool_args.get("message", "Working on that for you.")
+                self.logger.info(f"Inform user: {message}")
+                inform_event = InformUserEvent(message=message)
+                events.append(inform_event)  # type: ignore
+                if event_callback:
+                    event_callback(inform_event)
+
+            # Execute other tool calls in parallel
+            async def _execute_single_tool(
+                tool_call: ChatCompletionMessageFunctionToolCall,
+            ) -> tuple[ChatCompletionMessageFunctionToolCall, str, bool]:
                 tool_name = tool_call.function.name
                 tool_args = (
                     json.loads(tool_call.function.arguments)
@@ -259,19 +325,33 @@ class MCPService:
                 if event_callback:
                     event_callback(result_event)
 
-                self.messages.append(
-                    cast(
-                        ChatCompletionMessageParam,
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": tool_name,
-                            "content": result_str,
-                        },
-                    )
-                )
+                return tool_call, result_str, success
 
-        self._trim_history_if_needed()
+            # Run all tool calls concurrently
+            if other_calls:
+                tool_tasks = [_execute_single_tool(tc) for tc in other_calls]
+                results = await asyncio.gather(*tool_tasks, return_exceptions=True)
+
+                # Add results to messages in order
+                for result in results:
+                    if isinstance(result, BaseException):
+                        self.logger.error(f"Tool execution failed: {result}")
+                        continue
+                    # result is a tuple[ChatCompletionMessageFunctionToolCall, str, bool]
+                    result_tuple = result
+                    self.messages.append(
+                        cast(
+                            ChatCompletionMessageParam,
+                            {
+                                "role": "tool",
+                                "tool_call_id": result_tuple[0].id,
+                                "name": result_tuple[0].function.name,
+                                "content": result_tuple[1],
+                            },
+                        )
+                    )
+
+        self._prune_history_if_needed(event_callback)
         self.logger.debug(f"MCP processing complete after {turn_count} turns")
 
         return sections, events
@@ -320,19 +400,28 @@ class MCPService:
         """Parse response into sections."""
         return _parse_response(content)
 
-    def _trim_history_if_needed(self) -> None:
-        """Trim conversation history if it exceeds threshold."""
-        cfg = get_config()
+    def _prune_history_if_needed(
+        self, event_callback: ToolEventCallback | None = None
+    ) -> None:
+        """Turn-based pruning with tool output redaction."""
+        result = prune_turns(self.messages)
 
-        # Count non-system messages
-        non_system = [m for m in self.messages if m.get("role") != "system"]
+        if result.turns_pruned > 0:
+            self.messages = result.messages
+            self.logger.info(
+                f"History pruned: {result.turns_pruned} turns removed, "
+                f"{result.tools_redacted} tools redacted, "
+                f"turns {result.original_turn_count} -> {result.final_turn_count}"
+            )
 
-        if len(non_system) <= cfg.max_hist_threshold_size:
-            return
-
-        # Keep most recent messages
-        keep_count = cfg.hist_reset_size
-        self.messages = self.messages[-keep_count:]
+            if event_callback:
+                event = PruningEvent(
+                    turns_pruned=result.turns_pruned,
+                    tools_redacted=result.tools_redacted,
+                    original_turn_count=result.original_turn_count,
+                    final_turn_count=result.final_turn_count,
+                )
+                event_callback(event)
 
     def mark_interrupted(self) -> None:
         """Mark that the user interrupted."""

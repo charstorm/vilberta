@@ -269,6 +269,7 @@ def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None
         print_status("Connecting to MCP server...")
         try:
             llm.connect()
+            llm.set_tts_engine(tts)
         except Exception as e:
             print_error(f"Failed to connect to MCP server: {e}")
             sys.exit(1)

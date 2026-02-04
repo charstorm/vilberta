@@ -6,9 +6,16 @@ from typing import Any
 
 from vilberta.config import get_config, Section
 from vilberta.llm_service import BaseLLMService
-from vilberta.mcp_service import MCPService, ToolCallEvent, ToolResultEvent
+from vilberta.mcp_service import (
+    MCPService,
+    ToolCallEvent,
+    ToolResultEvent,
+    InformUserEvent,
+    PruningEvent,
+)
 from vilberta.display import print_status, print_tool_call, print_tool_result
 from vilberta.sound_effects import play_tool_call_start
+from vilberta.tts_engine import TTSEngine
 
 
 @dataclass
@@ -39,6 +46,9 @@ class MCPAwareLLMService(BaseLLMService):
         self._last_cache_read_tokens = 0
         self._last_cache_write_tokens = 0
         self._last_latency_s = 0.0
+
+        # TTS engine reference for inform messages
+        self._tts_engine: TTSEngine | None = None
 
         # Background event loop for all async operations
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -77,6 +87,10 @@ class MCPAwareLLMService(BaseLLMService):
     @property
     def last_latency_s(self) -> float:
         return self._last_latency_s
+
+    def set_tts_engine(self, tts_engine: TTSEngine) -> None:
+        """Set the TTS engine for inform messages."""
+        self._tts_engine = tts_engine
 
     def connect(self) -> None:
         """Connect to MCP server using a background event loop."""
@@ -121,7 +135,17 @@ class MCPAwareLLMService(BaseLLMService):
                     idx += 1
                 time.sleep(0.2)
 
-        def _event_callback(event: ToolCallEvent | ToolResultEvent) -> None:
+        # Track TTS threads for inform messages
+        active_tts_threads: list[threading.Thread] = []
+
+        def _speak_inform_message(message: str) -> None:
+            """Speak the inform message."""
+            if self._tts_engine is not None:
+                self._tts_engine.speak(message)
+
+        def _event_callback(
+            event: ToolCallEvent | ToolResultEvent | InformUserEvent | PruningEvent,
+        ) -> None:
             """Handle tool events in real-time with status updates and sounds."""
             nonlocal active_tool
 
@@ -132,6 +156,16 @@ class MCPAwareLLMService(BaseLLMService):
             elif isinstance(event, ToolResultEvent):
                 active_tool = None
                 print_tool_result(event.tool_name, event.success, event.result)
+            elif isinstance(event, InformUserEvent):
+                # Start TTS in background thread
+                tts_thread = threading.Thread(
+                    target=_speak_inform_message, args=(event.message,), daemon=True
+                )
+                tts_thread.start()
+                active_tts_threads.append(tts_thread)
+            elif isinstance(event, PruningEvent):
+                # Log pruning event - no UI action needed
+                pass
 
         # Start spinner thread
         spinner_thread = threading.Thread(target=_spinner_worker, daemon=True)
@@ -141,6 +175,10 @@ class MCPAwareLLMService(BaseLLMService):
             sections, events = self._run_async(
                 self.mcp_service.process_message(transcript, _event_callback)
             )
+
+            # Wait for all inform TTS threads to complete
+            for thread in active_tts_threads:
+                thread.join(timeout=30.0)
         finally:
             stop_spinner.set()
             spinner_thread.join(timeout=0.5)

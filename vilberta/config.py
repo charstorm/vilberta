@@ -52,6 +52,12 @@ class Config:
     max_hist_threshold_size: int = 16
     hist_reset_size: int = 8
 
+    # MCP Turn-based pruning settings
+    mcp_max_turns: int = 10
+    mcp_pruned_turns: int = 6
+    mcp_tool_redact_threshold_chars: int = 100
+    mcp_tool_redact_window: int = 2
+
     # Interruption settings
     interrupt_speech_duration_ms: int = 300
 
@@ -99,6 +105,14 @@ class Config:
             ),
             hist_reset_size=chat.get("hist_reset_size", cls.hist_reset_size),
             mcp_server_url=mcp.get("server_url", cls.mcp_server_url),
+            mcp_max_turns=mcp.get("max_turns", cls.mcp_max_turns),
+            mcp_pruned_turns=mcp.get("pruned_turns", cls.mcp_pruned_turns),
+            mcp_tool_redact_threshold_chars=mcp.get(
+                "tool_redact_threshold_chars", cls.mcp_tool_redact_threshold_chars
+            ),
+            mcp_tool_redact_window=mcp.get(
+                "tool_redact_window", cls.mcp_tool_redact_window
+            ),
         )
 
 

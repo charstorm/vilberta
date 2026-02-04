@@ -80,3 +80,6 @@ The assistant responds with tagged sections:
 ### Non-Streaming Architecture
 All LLM responses are fetched as complete responses (non-streaming) for simplicity and lower perceived latency. The `_parse_response()` function in both `llm_service.py` and `mcp_service.py` uses `text_section_splitter.py` to parse tagged sections.
 
+
+## Virtual Environment
+Check for venv or .venv for tools like ruff and mypy
