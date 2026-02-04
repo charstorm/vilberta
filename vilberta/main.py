@@ -96,7 +96,7 @@ def _run_preflight_checks() -> None:
 # ── Boot sequence (runs inside UI via queue) ─────────────────────────────────
 
 
-def _get_boot_lines() -> list[tuple[str, str]]:
+def _get_boot_lines() -> list[str]:
     cfg = get_config()
     model_name = (
         cfg.basic_chat_llm_model_name
@@ -104,21 +104,17 @@ def _get_boot_lines() -> list[tuple[str, str]]:
         else cfg.toolcall_chat_llm_model_name
     )
     return [
-        ("[ OK ] Neural link", "ONLINE"),
-        ("[ OK ] Voice matrix", "ONLINE"),
-        ("[ OK ] Audio subsystem", "ONLINE"),
-        (f"[ OK ] Model: {model_name}", "LINKED"),
-        ("[ OK ] System", "READY"),
+        f"  Model: {model_name}",
+        "",
+        "  Initializing subsystems...",
     ]
 
 
 def _play_boot_sequence(queue: Queue[DisplayEvent]) -> None:
-    for label, status in _get_boot_lines():
-        dots = "." * (42 - len(label) - len(status))
-        queue.put(DisplayEvent(type="boot", content=f"  {label} {dots} {status}"))
-        time.sleep(0.25)
-    queue.put(DisplayEvent(type="boot", content=""))
-    time.sleep(0.5)
+    for line in _get_boot_lines():
+        queue.put(DisplayEvent(type="boot", content=line))
+        time.sleep(0.15)
+    queue.put(DisplayEvent(type="status", content="System loading..."))
 
 
 # ── Core voice loop (unchanged logic) ────────────────────────────────────────
