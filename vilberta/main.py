@@ -6,10 +6,14 @@ import time
 import argparse
 from queue import Queue
 
+import numpy as np
+from numpy.typing import NDArray
+
 from openai import OpenAI, AuthenticationError
 
+from vilberta.asr_service import ASRService
 from vilberta.audio_capture import record_speech, audio_to_base64_wav
-from vilberta.config import init_config, get_config, SectionType
+from vilberta.config import init_config, get_config, SectionType, Config
 from vilberta.interrupt_monitor import InterruptMonitor
 from vilberta.llm_service import BaseLLMService, BasicLLMService
 from vilberta.mcp_llm_service import MCPAwareLLMService
@@ -21,9 +25,7 @@ from vilberta.display import (
     print_transcript,
     print_status,
     print_error,
-    print_stats,
     DisplayEvent,
-    RequestStats,
 )
 from vilberta.sound_effects import (
     play_response_send,
@@ -94,11 +96,16 @@ def _run_preflight_checks() -> None:
 
 def _get_boot_lines() -> list[tuple[str, str]]:
     cfg = get_config()
+    model_name = (
+        cfg.basic_chat_llm_model_name
+        if cfg.mode == "basic"
+        else cfg.toolcall_chat_llm_model_name
+    )
     return [
         ("[ OK ] Neural link", "ONLINE"),
         ("[ OK ] Voice matrix", "ONLINE"),
         ("[ OK ] Audio subsystem", "ONLINE"),
-        (f"[ OK ] Model: {cfg.model_name}", "LINKED"),
+        (f"[ OK ] Model: {model_name}", "LINKED"),
         ("[ OK ] System", "READY"),
     ]
 
@@ -153,22 +160,38 @@ def _process_response(
     llm: BaseLLMService,
     tts: TTSEngine,
     monitor: InterruptMonitor,
-    audio_b64: str,
-    audio_duration_s: float,
-) -> None:
+    transcript: str,
+) -> bool:
+    """Process transcript through LLM and TTS. Returns True if completed without interruption."""
     interrupted = False
     monitor.start()
 
     play_response_send()
 
+    # Step 2: LLM - Process transcript
+    print_status("Processing...")
+    llm_start = time.monotonic()
     try:
-        sections, _full_response = llm.get_response(audio_b64)
-        play_response_received()
+        sections, _full_response = llm.get_response(transcript)
+        llm_time = time.monotonic() - llm_start
+        print_status(
+            f"LLM: {llm_time:.2f}s, "
+            f"tokens: {llm.last_input_tokens}/{llm.last_output_tokens}"
+        )
+    except Exception as e:
+        monitor.stop()
+        raise e
 
+    play_response_received()
+
+    try:
         for section in sections:
             if section.type == SectionType.SPEAK:
                 print_speak(section.content)
+                tts_start = time.monotonic()
                 completed = _speak_with_monitor(tts, monitor, section.content)
+                tts_time = time.monotonic() - tts_start
+                print_status(f"TTS line: {tts_time:.2f}s")
                 if not completed or monitor.triggered:
                     interrupted = True
                     break
@@ -177,27 +200,51 @@ def _process_response(
                 time.sleep(0.3)
                 print_text(section.content)
                 time.sleep(0.8)
-            elif section.type == SectionType.TRANSCRIPT:
-                print_transcript(section.content)
     finally:
         monitor.stop()
-
-    # Emit stats
-    stats = RequestStats(
-        audio_duration_s=audio_duration_s,
-        input_tokens=llm.last_input_tokens,
-        output_tokens=llm.last_output_tokens,
-        cache_read_tokens=llm.last_cache_read_tokens,
-        cache_write_tokens=llm.last_cache_write_tokens,
-        latency_s=llm.last_latency_s,
-    )
-    print_stats(stats)
 
     if interrupted:
         llm.mark_interrupted()
         print_status("[interrupted]")
     else:
         play_response_end()
+
+    return not interrupted
+
+
+def _process_turn(
+    llm: BaseLLMService,
+    tts: TTSEngine,
+    monitor: InterruptMonitor,
+    audio_data: NDArray[np.int16],
+    asr: ASRService,
+    cfg: Config,
+) -> None:
+    """Process a single turn: ASR -> LLM -> TTS."""
+    # Prepare audio data
+    audio_dur = len(audio_data) / cfg.sample_rate
+    audio_b64 = audio_to_base64_wav(audio_data)
+
+    # Step 1: ASR - Transcribe audio
+    print_status("Transcribing...")
+    try:
+        transcript, asr_stats = asr.transcribe(audio_b64, audio_dur)
+    except Exception as e:
+        print_error(f"ASR error: {e}")
+        return
+
+    # Display transcript immediately
+    print_transcript(transcript)
+    print_status(
+        f"ASR: {asr_stats.processing_time_s:.2f}s, "
+        f"tokens: {asr_stats.input_tokens}/{asr_stats.output_tokens}"
+    )
+
+    # Step 2 & 3: LLM -> TTS
+    try:
+        _process_response(llm, tts, monitor, transcript)
+    except Exception as e:
+        print_error(f"LLM error: {e}")
 
 
 def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None:
@@ -207,6 +254,10 @@ def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None
     print_status("Loading TTS model...")
     tts = TTSEngine()
     print_status("TTS ready.")
+
+    print_status("Initializing ASR service...")
+    asr = ASRService()
+    print_status("ASR ready.")
 
     print_status("Initializing LLM service...")
     llm = _create_llm_service()
@@ -233,27 +284,15 @@ def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None
             if audio_data is None:
                 continue
 
-            print_status("Processing...")
-            audio_dur = len(audio_data) / cfg.sample_rate
-            audio_b64 = audio_to_base64_wav(audio_data)
+            _process_turn(llm, tts, monitor, audio_data, asr, cfg)
 
-            try:
-                _process_response(llm, tts, monitor, audio_b64, audio_dur)
-            except Exception as e:
-                print_error(f"LLM error: {e}")
-
+            # Handle continuation after interruption
             prefix = monitor.buffered_audio if monitor.triggered else None
             if prefix is not None:
                 print_status("Continuing recording...")
                 audio_data = record_speech(prefix_audio=prefix)
                 if audio_data is not None:
-                    print_status("Processing...")
-                    audio_dur = len(audio_data) / cfg.sample_rate
-                    audio_b64 = audio_to_base64_wav(audio_data)
-                    try:
-                        _process_response(llm, tts, monitor, audio_b64, audio_dur)
-                    except Exception as e:
-                        print_error(f"LLM error: {e}")
+                    _process_turn(llm, tts, monitor, audio_data, asr, cfg)
 
             print_status("Listening...")
     finally:

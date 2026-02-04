@@ -15,7 +15,6 @@ class SimpleCLI:
         self.event_queue: Queue[DisplayEvent] | None = None
         self.shutdown_event: threading.Event | None = None
         self.exchange_count = 0
-        self.session_cost = 0.0
 
     def run(
         self, event_queue: Queue[DisplayEvent], shutdown_event: threading.Event
@@ -55,15 +54,6 @@ class SimpleCLI:
         elif event.type == "vad":
             status = "▲ speech" if event.content == "up" else "▼ silence"
             print(f"[VAD: {status}]")
-
-        elif event.type == "stats":
-            if event.stats:
-                self.session_cost += event.stats.cost_usd
-                print(
-                    f"[Stats: {event.stats.latency_s:.2f}s | "
-                    f"in={event.stats.input_tokens} out={event.stats.output_tokens} | "
-                    f"cost=${self.session_cost:.4f}]"
-                )
 
     def cleanup(self) -> None:
         """Cleanup method (no-op for CLI)."""

@@ -11,7 +11,6 @@ from numpy.typing import NDArray
 class SectionType(Enum):
     SPEAK = "speak"
     TEXT = "text"
-    TRANSCRIPT = "transcript"
 
 
 @dataclass
@@ -28,7 +27,9 @@ class Config:
     # LLM API settings
     api_base_url: str = "https://openrouter.ai/api/v1"
     api_key_env: str = "OPENROUTER_API_KEY"
-    model_name: str = "google/gemini-2.5-flash"
+    transcriber_llm_model_name: str = "google/gemini-2.5-flash-lite"
+    basic_chat_llm_model_name: str = "openai/gpt-4o-mini"
+    toolcall_chat_llm_model_name: str = "openai/gpt-4o-mini"
 
     # Audio settings
     sample_rate: int = 16000
@@ -83,7 +84,15 @@ class Config:
             mode=general.get("mode", cls.mode),
             api_base_url=llm_api.get("api_base_url", cls.api_base_url),
             api_key_env=llm_api.get("api_key_env", cls.api_key_env),
-            model_name=llm_api.get("model_name", cls.model_name),
+            transcriber_llm_model_name=llm_api.get(
+                "transcriber_llm_model_name", cls.transcriber_llm_model_name
+            ),
+            basic_chat_llm_model_name=llm_api.get(
+                "basic_chat_llm_model_name", cls.basic_chat_llm_model_name
+            ),
+            toolcall_chat_llm_model_name=llm_api.get(
+                "toolcall_chat_llm_model_name", cls.toolcall_chat_llm_model_name
+            ),
             tts_voice=tts.get("tts_voice", cls.tts_voice),
             max_hist_threshold_size=chat.get(
                 "max_hist_threshold_size", cls.max_hist_threshold_size

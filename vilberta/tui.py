@@ -14,7 +14,7 @@ from textual.widgets import Static, Footer
 from textual.reactive import reactive
 
 from vilberta.config import get_config
-from vilberta.display import DisplayEvent, RequestStats
+from vilberta.display import DisplayEvent
 
 
 def parse_markdown_to_textual(text: str) -> str:
@@ -88,27 +88,20 @@ class ScrollingLog(VerticalScroll):
 
 
 class SystemPanel(Container):
-    """Left panel showing system information and stats."""
+    """Left panel showing system information and status."""
 
     status_text = reactive("INITIALIZING")
-    last_stats: reactive[RequestStats | None] = reactive(None)
     exchange_count = reactive(0)
-    session_cost = reactive(0.0)
-    session_tokens_in = reactive(0)
-    session_tokens_out = reactive(0)
     vad_active = reactive(False)
 
     def __init__(self) -> None:
         super().__init__(id="system-panel")
-        self.response_times: deque[float] = deque(maxlen=20)
         self.pulse_frame = 0
 
     def compose(self) -> ComposeResult:
         yield Static(id="system-header")
         yield Static(id="system-info")
         yield WaveformWidget(id="waveform")
-        yield Static(id="stats-display")
-        yield Static(id="session-display")
         yield Static(id="status-display")
 
     def on_mount(self) -> None:
@@ -127,14 +120,17 @@ class SystemPanel(Container):
     def update_display(self) -> None:
         self.update_header()
         self.update_system_info()
-        self.update_stats()
-        self.update_session()
         self.update_status()
 
     def update_system_info(self) -> None:
         cfg = get_config()
+        model_name = (
+            cfg.basic_chat_llm_model_name
+            if cfg.mode == "basic"
+            else cfg.toolcall_chat_llm_model_name
+        )
         info = (
-            f"{cfg.model_name[:30]}\n"
+            f"{model_name[:30]}\n"
             f"{cfg.tts_voice} • {cfg.sample_rate // 1000}kHz\n"
             "\n"
             "AUDIO WAVEFORM"
@@ -143,67 +139,18 @@ class SystemPanel(Container):
         widget.update(info)
         widget.add_class("muted")
 
-    def update_stats(self) -> None:
-        if not self.last_stats:
-            self.query_one("#stats-display", Static).update("")
-            return
-
-        stats = self.last_stats
-
-        lines = [
-            "LAST REQUEST",
-            "─" * 28,
-            f"Duration    {stats.audio_duration_s:.2f}s",
-            f"Latency     {stats.latency_s:.2f}s",
-            f"Input       {stats.input_tokens:,}",
-            f"Output      {stats.output_tokens:,}",
-        ]
-
-        if stats.cache_read_tokens:
-            lines.append(f"Cache R     {stats.cache_read_tokens:,}")
-        if stats.cache_write_tokens:
-            lines.append(f"Cache W     {stats.cache_write_tokens:,}")
-
-        self.query_one("#stats-display", Static).update("\n".join(lines))
-
-    def update_session(self) -> None:
-        sparkline = self.create_sparkline()
-
+    def update_status(self) -> None:
         lines = [
             "",
             "SESSION",
             "─" * 28,
             f"Turns       {self.exchange_count}",
-            f"Cost        ${self.session_cost:.4f}",
-            f"Tok In      {self.session_tokens_in:,}",
-            f"Tok Out     {self.session_tokens_out:,}",
             "",
-            "RESPONSE TIMES",
-            sparkline,
+            f"▸ {self.status_text}",
         ]
 
-        self.query_one("#session-display", Static).update("\n".join(lines))
-
-    def create_sparkline(self) -> str:
-        if not self.response_times:
-            return ""
-
-        bars = "▁▂▃▄▅▆▇█"
-        times = list(self.response_times)
-        max_val = max(times) if max(times) > 0 else 1.0
-
-        sparkline = "".join(
-            bars[min(len(bars) - 1, int((val / max_val) * len(bars)))] for val in times
-        )
-
-        return sparkline
-
-    def update_status(self) -> None:
-        status = f"▸ {self.status_text}"
-        display = f"\nSTATUS\n{status}"
-
         widget = self.query_one("#status-display", Static)
-        widget.update(display)
+        widget.update("\n".join(lines))
 
         if "LISTEN" in self.status_text:
             widget.add_class("highlight")
@@ -213,23 +160,8 @@ class SystemPanel(Container):
     def watch_status_text(self, value: str) -> None:
         self.update_status()
 
-    def watch_last_stats(self, value: RequestStats | None) -> None:
-        if value:
-            self.response_times.append(value.latency_s)
-        self.update_stats()
-        self.update_session()
-
     def watch_exchange_count(self, value: int) -> None:
-        self.update_session()
-
-    def watch_session_cost(self, value: float) -> None:
-        self.update_session()
-
-    def watch_session_tokens_in(self, value: int) -> None:
-        self.update_session()
-
-    def watch_session_tokens_out(self, value: int) -> None:
-        self.update_session()
+        self.update_status()
 
     def watch_vad_active(self, value: bool) -> None:
         waveform = self.query_one("#waveform", WaveformWidget)
@@ -498,19 +430,6 @@ class VilbertaTUI(App[None]):
             status = "▲ speech" if event.content == "up" else "▼ silence"
             style = "vad-active" if event.content == "up" else "vad-inactive"
             events_log.write(f"VAD   {status}", style)
-
-        elif event.type == "stats":
-            if event.stats:
-                system_panel.last_stats = event.stats
-                system_panel.session_cost += event.stats.cost_usd
-                system_panel.session_tokens_in += event.stats.input_tokens
-                system_panel.session_tokens_out += event.stats.output_tokens
-
-                events_log.write(
-                    f"STATS latency={event.stats.latency_s:.2f}s "
-                    f"in={event.stats.input_tokens} out={event.stats.output_tokens}",
-                    "event",
-                )
 
         elif event.type == "boot":
             events_log.write(f"BOOT  {event.content.strip()[:30]}", "event")

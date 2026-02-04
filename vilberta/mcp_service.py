@@ -23,13 +23,11 @@ PROMPT_PATH = Path(__file__).parent / "prompts" / "system_mcp.md"
 _TAG_SECTIONS = [
     StreamSection("[speak]", "[/speak]", inner_split_on=["\n"]),
     StreamSection("[text]", "[/text]", inner_split_on=None),
-    StreamSection("[transcript]", "[/transcript]", inner_split_on=None),
 ]
 
 _TAG_OPEN = {
     "[speak]": SectionType.SPEAK,
     "[text]": SectionType.TEXT,
-    "[transcript]": SectionType.TRANSCRIPT,
 }
 
 _TAG_STRINGS = {s.starting_tag for s in _TAG_SECTIONS} | {
@@ -81,17 +79,8 @@ def _load_system_prompt() -> str:
     return "You are a helpful voice assistant with access to tools."
 
 
-def _build_audio_user_message(audio_b64: str) -> dict[str, Any]:
-    return {
-        "role": "user",
-        "content": [
-            {
-                "type": "input_audio",
-                "input_audio": {"data": audio_b64, "format": "wav"},
-            },
-            {"type": "text", "text": "Respond to the user."},
-        ],
-    }
+def _build_text_user_message(transcript: str) -> dict[str, str]:
+    return {"role": "user", "content": transcript}
 
 
 def _convert_mcp_tool_to_openai(tool: Any) -> dict[str, Any]:
@@ -128,7 +117,7 @@ class MCPService:
         cfg = get_config()
         api_key = os.environ.get(cfg.api_key_env, "")
         self.openai_client = AsyncOpenAI(base_url=cfg.api_base_url, api_key=api_key)
-        self.model = cfg.model_name
+        self.model = cfg.toolcall_chat_llm_model_name
 
         # Metrics from last request
         self.last_input_tokens = 0
@@ -163,13 +152,13 @@ class MCPService:
 
     async def process_message(
         self,
-        audio_b64: str,
+        transcript: str,
         event_callback: ToolEventCallback | None = None,
     ) -> tuple[list[Section], list[ToolCallEvent | ToolResultEvent]]:
-        """Process user audio message through MCP tool calling loop.
+        """Process user transcript through MCP tool calling loop.
 
         Args:
-            audio_b64: Base64-encoded audio data
+            transcript: User's transcribed speech
             event_callback: Optional callback for real-time tool event notifications
 
         Returns:
@@ -181,7 +170,7 @@ class MCPService:
         self.logger.debug("Triggering MCP LLM request")
         self._interrupted = False
         self.messages.append(
-            cast(ChatCompletionMessageParam, _build_audio_user_message(audio_b64))
+            cast(ChatCompletionMessageParam, _build_text_user_message(transcript))
         )
 
         events: list[ToolCallEvent | ToolResultEvent] = []

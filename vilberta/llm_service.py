@@ -15,13 +15,11 @@ PROMPT_PATH = Path(__file__).parent / "prompts" / "system.md"
 _TAG_SECTIONS = [
     StreamSection("[speak]", "[/speak]", inner_split_on=["\n"]),
     StreamSection("[text]", "[/text]", inner_split_on=None),
-    StreamSection("[transcript]", "[/transcript]", inner_split_on=None),
 ]
 
 _TAG_OPEN = {
     "[speak]": SectionType.SPEAK,
     "[text]": SectionType.TEXT,
-    "[transcript]": SectionType.TRANSCRIPT,
 }
 
 _TAG_STRINGS = {s.starting_tag for s in _TAG_SECTIONS} | {
@@ -51,19 +49,6 @@ def _load_system_prompt() -> str:
     return PROMPT_PATH.read_text(encoding="utf-8")
 
 
-def _build_audio_user_message(audio_b64: str) -> dict[str, Any]:
-    return {
-        "role": "user",
-        "content": [
-            {
-                "type": "input_audio",
-                "input_audio": {"data": audio_b64, "format": "wav"},
-            },
-            {"type": "text", "text": "Respond to the user."},
-        ],
-    }
-
-
 def _build_text_user_message(transcript: str) -> dict[str, str]:
     return {"role": "user", "content": transcript}
 
@@ -74,20 +59,13 @@ def _build_assistant_message(full_response: str) -> dict[str, str]:
 
 class ConversationHistory:
     def __init__(self) -> None:
-        self.messages: list[dict[str, Any]] = []
+        self.messages: list[dict[str, str]] = []
 
-    def add_user_audio(self, audio_b64: str) -> None:
-        self.messages.append(_build_audio_user_message(audio_b64))
+    def add_user_text(self, transcript: str) -> None:
+        self.messages.append(_build_text_user_message(transcript))
 
     def add_assistant(self, full_response: str) -> None:
         self.messages.append(_build_assistant_message(full_response))
-
-    def replace_last_user_audio_with_transcript(self, transcript: str) -> None:
-        for i in range(len(self.messages) - 1, -1, -1):
-            msg = self.messages[i]
-            if msg["role"] == "user" and isinstance(msg["content"], list):
-                self.messages[i] = _build_text_user_message(transcript)
-                return
 
     def trim_if_needed(self) -> None:
         cfg = get_config()
@@ -103,8 +81,11 @@ class BaseLLMService(ABC):
     """Abstract base class for LLM services."""
 
     @abstractmethod
-    def get_response(self, audio_b64: str) -> tuple[list[Section], str]:
+    def get_response(self, transcript: str) -> tuple[list[Section], str]:
         """Get response from LLM.
+
+        Args:
+            transcript: User's transcribed speech
 
         Returns list of parsed sections and the full response string.
         """
@@ -183,16 +164,16 @@ class BasicLLMService(BaseLLMService):
     def last_latency_s(self) -> float:
         return self._last_latency_s
 
-    def get_response(self, audio_b64: str) -> tuple[list[Section], str]:
+    def get_response(self, transcript: str) -> tuple[list[Section], str]:
         self.logger.debug("Triggering LLM request")
-        self.history.add_user_audio(audio_b64)
+        self.history.add_user_text(transcript)
         messages = self.history.get_api_messages(self.system_prompt)
 
         self.logger.debug(f"Sending request with {len(messages)} messages")
         t0 = time.monotonic()
         cfg = get_config()
         response = self.client.chat.completions.create(
-            model=cfg.model_name,
+            model=cfg.basic_chat_llm_model_name,
             messages=cast(Any, messages),
             stream=False,
             user="vilberta",
@@ -222,12 +203,6 @@ class BasicLLMService(BaseLLMService):
         self.logger.info(f"Parsed {len(sections)} sections from response")
 
         self.history.add_assistant(full_response)
-
-        transcript = self._extract_transcript(full_response)
-        if transcript:
-            self.logger.debug(f"Extracted transcript: {transcript[:100]}...")
-            self.history.replace_last_user_audio_with_transcript(transcript)
-
         self.history.trim_if_needed()
 
         return sections, full_response
@@ -238,14 +213,6 @@ class BasicLLMService(BaseLLMService):
         last = self.history.messages[-1]
         if last["role"] == "assistant" and isinstance(last["content"], str):
             last["content"] = last["content"] + "\n[interrupted by user]"
-
-    @staticmethod
-    def _extract_transcript(full_response: str) -> str | None:
-        start = full_response.find("[transcript]")
-        end = full_response.find("[/transcript]")
-        if start == -1 or end == -1:
-            return None
-        return full_response[start + len("[transcript]") : end].strip()
 
 
 # Keep alias for backward compatibility

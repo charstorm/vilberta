@@ -108,8 +108,8 @@ class MCPAwareLLMService(BaseLLMService):
         if self._loop_thread is not None:
             self._loop_thread.join(timeout=5.0)
 
-    def get_response(self, audio_b64: str) -> tuple[list[Section], str]:
-        """Process message through MCP and return sections."""
+    def get_response(self, transcript: str) -> tuple[list[Section], str]:
+        """Process transcript through MCP and return sections."""
         # Track active tool calls for busy indicator
         active_tool: str | None = None
         stop_spinner = threading.Event()
@@ -159,7 +159,7 @@ class MCPAwareLLMService(BaseLLMService):
 
         try:
             sections, events = self._run_async(
-                self.mcp_service.process_message(audio_b64, _event_callback)
+                self.mcp_service.process_message(transcript, _event_callback)
             )
         finally:
             stop_spinner.set()
