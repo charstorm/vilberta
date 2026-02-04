@@ -5,6 +5,7 @@ import threading
 import time
 import argparse
 from queue import Queue
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -25,6 +26,7 @@ from vilberta.display import (
     print_transcript,
     print_status,
     print_error,
+    print_subsystem_ready,
     DisplayEvent,
 )
 from vilberta.sound_effects import (
@@ -37,7 +39,7 @@ from vilberta.sound_effects import (
 )
 from vilberta.cli import SimpleCLI
 from vilberta.tui import CursesTUI
-from vilberta.logger import init_logger
+from vilberta.logger import init_logger, get_logger
 
 
 _EXPECTED_SOUNDS = [
@@ -115,8 +117,6 @@ def _play_boot_sequence(queue: Queue[DisplayEvent]) -> None:
         dots = "." * (42 - len(label) - len(status))
         queue.put(DisplayEvent(type="boot", content=f"  {label} {dots} {status}"))
         time.sleep(0.25)
-    queue.put(DisplayEvent(type="boot", content=""))
-    queue.put(DisplayEvent(type="boot", content="  ═══ All systems nominal ═══"))
     queue.put(DisplayEvent(type="boot", content=""))
     time.sleep(0.5)
 
@@ -219,6 +219,7 @@ def _process_turn(
     audio_data: NDArray[np.int16],
     asr: ASRService,
     cfg: Config,
+    logger: Any,
 ) -> None:
     """Process a single turn: ASR -> LLM -> TTS."""
     # Prepare audio data
@@ -231,6 +232,7 @@ def _process_turn(
         context_words = llm.get_unique_words(max_words=100)
         transcript, asr_stats = asr.transcribe(audio_b64, audio_dur, context_words)
     except Exception as e:
+        logger.error(f"ASR error: {e}")
         print_error(f"ASR error: {e}")
         return
 
@@ -245,32 +247,73 @@ def _process_turn(
     try:
         _process_response(llm, tts, monitor, transcript)
     except Exception as e:
+        logger.error(f"LLM error: {e}")
         print_error(f"LLM error: {e}")
+
+
+class _SubsystemTracker:
+    """Track subsystem initialization status."""
+
+    def __init__(self) -> None:
+        self._ready: set[str] = set()
+        self._expected: set[str] = {"tts", "asr", "llm"}
+
+    def add_expected(self, name: str) -> None:
+        self._expected.add(name)
+
+    def mark_ready(self, name: str) -> None:
+        self._ready.add(name)
+        print_subsystem_ready(name)
+        if self._ready == self._expected:
+            print_status("")
+            print_status("  ═══ All systems nominal ═══")
+            print_status("")
+
+    def is_ready(self, name: str) -> bool:
+        return name in self._ready
 
 
 def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None:
     """Worker thread: init services, run voice loop."""
+    logger = get_logger("main")
     _play_boot_sequence(queue)
 
+    tracker = _SubsystemTracker()
+    cfg = get_config()
+    if cfg.mode == "mcp":
+        tracker.add_expected("mcp")
+
     print_status("Loading TTS model...")
-    tts = TTSEngine()
-    print_status("TTS ready.")
+    try:
+        tts = TTSEngine()
+        tracker.mark_ready("tts")
+    except Exception as e:
+        logger.error(f"Failed to initialize TTS: {e}")
+        print_error(f"Failed to initialize TTS: {e}")
+        sys.exit(1)
 
     print_status("Initializing ASR service...")
-    asr = ASRService()
-    print_status("ASR ready.")
+    try:
+        asr = ASRService()
+        tracker.mark_ready("asr")
+    except Exception as e:
+        logger.error(f"Failed to initialize ASR: {e}")
+        print_error(f"Failed to initialize ASR: {e}")
+        sys.exit(1)
 
     print_status("Initializing LLM service...")
     llm = _create_llm_service()
+    tracker.mark_ready("llm")
 
     # Connect to MCP server if in MCP mode
-    cfg = get_config()
     if cfg.mode == "mcp" and isinstance(llm, MCPAwareLLMService):
         print_status("Connecting to MCP server...")
         try:
             llm.connect()
             llm.set_tts_engine(tts)
+            tracker.mark_ready("mcp")
         except Exception as e:
+            logger.error(f"Failed to connect to MCP server: {e}")
             print_error(f"Failed to connect to MCP server: {e}")
             sys.exit(1)
 
@@ -286,7 +329,7 @@ def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None
             if audio_data is None:
                 continue
 
-            _process_turn(llm, tts, monitor, audio_data, asr, cfg)
+            _process_turn(llm, tts, monitor, audio_data, asr, cfg, logger)
 
             # Handle continuation after interruption
             prefix = monitor.buffered_audio if monitor.triggered else None
@@ -294,9 +337,12 @@ def _worker(queue: Queue[DisplayEvent], shutdown_event: threading.Event) -> None
                 print_status("Continuing recording...")
                 audio_data = record_speech(prefix_audio=prefix)
                 if audio_data is not None:
-                    _process_turn(llm, tts, monitor, audio_data, asr, cfg)
+                    _process_turn(llm, tts, monitor, audio_data, asr, cfg, logger)
 
             print_status("Listening...")
+    except Exception as e:
+        logger.error(f"Worker thread error: {e}")
+        raise
     finally:
         # Cleanup MCP connection if applicable
         if isinstance(llm, MCPAwareLLMService):

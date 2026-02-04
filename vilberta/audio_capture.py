@@ -15,6 +15,7 @@ from vilberta.config import (
     get_config,
 )
 from vilberta.display import print_vad
+from vilberta.logger import get_logger
 
 
 class VADProcessor:
@@ -23,6 +24,7 @@ class VADProcessor:
     ) -> None:
         self.detector = detector
         self.config = config
+        self.logger = get_logger("VADProcessor")
 
     def is_speech(self, audio_chunk: NDArray[np.int16]) -> bool:
         cfg = get_config()
@@ -40,6 +42,7 @@ class AudioStreamHandler:
         self.config = config
         self.state = AudioState(ring_buffer=deque(maxlen=config.speech_pad_chunks))
         self.completed_audio: NDArray[np.int16] | None = None
+        self.logger = get_logger("AudioStreamHandler")
 
     def callback(
         self, indata: NDArray[np.int16], frames: int, time_info: object, status: object
@@ -75,6 +78,8 @@ class AudioStreamHandler:
         if self._should_end_speech():
             print_vad(up=False)
             self.completed_audio = np.concatenate(self.state.speech_buffer)
+            audio_duration_s = len(self.completed_audio) / get_config().sample_rate
+            self.logger.info(f"Speech ended: {audio_duration_s:.2f}s recorded")
             self.state.reset_speech()
             raise sd.CallbackStop
 
@@ -100,6 +105,7 @@ def audio_to_base64_wav(audio_data: NDArray[np.int16]) -> str:
 def record_speech(
     prefix_audio: NDArray[np.int16] | None = None,
 ) -> NDArray[np.int16] | None:
+    logger = get_logger("record_speech")
     cfg = get_config()
     detector = SileroVoiceActivityDetector()
     config = create_vad_config()
@@ -111,6 +117,7 @@ def record_speech(
         handler.state.speech_buffer.append(prefix_audio)
         handler.state.speech_chunks = len(prefix_audio) // cfg.chunk_size
         print_vad(up=True)
+        logger.debug(f"Recording with prefix audio: {len(prefix_audio)} samples")
 
     stream = sd.InputStream(
         samplerate=cfg.sample_rate,
@@ -121,7 +128,14 @@ def record_speech(
     )
 
     with stream:
+        logger.debug("Recording started")
         while stream.active:
             sd.sleep(100)
+
+    if handler.completed_audio is not None:
+        duration_s = len(handler.completed_audio) / cfg.sample_rate
+        logger.info(f"Recording complete: {duration_s:.2f}s audio captured")
+    else:
+        logger.debug("Recording ended with no audio captured")
 
     return handler.completed_audio

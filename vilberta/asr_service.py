@@ -173,5 +173,10 @@ class ASRService:
 
         cleaned = cleaned.strip()
 
-        parsed = json.loads(cleaned)
-        return parsed  # type: ignore
+        try:
+            parsed = json.loads(cleaned)
+            return parsed  # type: ignore
+        except json.JSONDecodeError as e:
+            self.logger.error(f"JSON parsing failed: {e}")
+            self.logger.debug(f"Raw output: {raw_output[:200]}...")
+            raise

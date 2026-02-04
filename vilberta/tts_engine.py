@@ -9,6 +9,7 @@ torch.backends.nnpack.enabled = False  # type: ignore[attr-defined]  # noqa: E40
 from pocket_tts import TTSModel  # noqa: E402
 
 from vilberta.config import get_config  # noqa: E402
+from vilberta.logger import get_logger  # noqa: E402
 
 FADE_SAMPLES = 64
 
@@ -25,16 +26,20 @@ def _apply_fade(audio: np.ndarray) -> np.ndarray:
 
 class TTSEngine:
     def __init__(self) -> None:
+        self.logger = get_logger("TTSEngine")
         cfg = get_config()
         self.model = TTSModel.load_model()
         self.voice_state = self.model.get_state_for_audio_prompt(cfg.tts_voice)
         self._interrupted = False
+        self.logger.info(f"TTS engine initialized with voice: {cfg.tts_voice}")
 
     def interrupt(self) -> None:
         self._interrupted = True
+        self.logger.debug("TTS interrupted")
 
     def speak(self, text: str) -> bool:
         """Speak a single line of text. Returns True if completed, False if interrupted."""
+        self.logger.info(f"Speaking text ({len(text)} chars)")
         cfg = get_config()
         self._interrupted = False
         original_rate = self.model.sample_rate
@@ -45,6 +50,7 @@ class TTSEngine:
         ) as stream:
             for chunk in self.model.generate_audio_stream(self.voice_state, text):
                 if self._interrupted:
+                    self.logger.info("TTS interrupted during playback")
                     return False
                 audio_np = chunk.numpy().astype(np.float32)
                 if cfg.tts_speed_factor != 1.0:
@@ -53,4 +59,5 @@ class TTSEngine:
                 audio_np = _apply_fade(audio_np)
                 stream.write(audio_np)
 
+        self.logger.info("TTS completed successfully")
         return True

@@ -17,6 +17,7 @@ from pysilero_vad import SileroVoiceActivityDetector
 
 from vilberta.config import get_config
 from vilberta.display import print_vad
+from vilberta.logger import get_logger
 
 
 class InterruptMonitor:
@@ -31,6 +32,7 @@ class InterruptMonitor:
         self._triggered = False
         self._lock = threading.Lock()
         self._stream: sd.InputStream | None = None
+        self.logger = get_logger("InterruptMonitor")
 
     @property
     def triggered(self) -> bool:
@@ -64,6 +66,7 @@ class InterruptMonitor:
             self._speech_chunks += 1
             if self._speech_chunks >= self._confirm_chunks:
                 self._triggered = True
+                self.logger.info("Interrupt triggered by user speech")
         else:
             if self._speech_chunks > 0:
                 print_vad(up=False)
@@ -91,6 +94,7 @@ class InterruptMonitor:
             callback=self._callback,
         )
         self._stream.start()
+        self.logger.debug("Interrupt monitoring started")
 
     def stop(self) -> None:
         if self._stream is not None:
@@ -99,3 +103,4 @@ class InterruptMonitor:
             self._stream = None
         if self._speech_chunks > 0:
             print_vad(up=False)
+        self.logger.debug(f"Interrupt monitoring stopped (triggered={self._triggered})")

@@ -435,6 +435,18 @@ class VilbertaTUI(App[None]):
         elif event.type == "boot":
             events_log.write(f"🚀 {event.content.strip()[:35]}", "event")
 
+        elif event.type == "subsystem_ready":
+            subsystem = event.content.upper()
+            status_map = {
+                "TTS": "TTS READY",
+                "ASR": "ASR READY",
+                "LLM": "LLM READY",
+                "MCP": "MCP READY",
+            }
+            if subsystem in status_map:
+                system_panel.status_text = status_map[subsystem]
+            events_log.write(f"✅ {subsystem} ready", "event")
+
         elif event.type == "tool_call":
             events_log.write(f"🔧 {event.content[:35]}", "event")
 

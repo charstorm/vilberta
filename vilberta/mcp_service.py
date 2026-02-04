@@ -335,7 +335,24 @@ class MCPService:
                 # Add results to messages in order
                 for result in results:
                     if isinstance(result, BaseException):
-                        self.logger.error(f"Tool execution failed: {result}")
+                        error_msg = f"Tool execution failed: {result}"
+                        self.logger.error(error_msg)
+                        # Create a tool response for the error to maintain 1:1 correspondence
+                        # Find the corresponding tool call from other_calls
+                        tool_call_index = results.index(result)
+                        if tool_call_index < len(other_calls):
+                            failed_tool_call = other_calls[tool_call_index]
+                            self.messages.append(
+                                cast(
+                                    ChatCompletionMessageParam,
+                                    {
+                                        "role": "tool",
+                                        "tool_call_id": failed_tool_call.id,
+                                        "name": failed_tool_call.function.name,
+                                        "content": f"Error: {error_msg}",
+                                    },
+                                )
+                            )
                         continue
                     # result is a tuple[ChatCompletionMessageFunctionToolCall, str, bool]
                     result_tuple = result

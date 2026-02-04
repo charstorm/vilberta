@@ -30,6 +30,7 @@ def init_logger(log_file: str | None = None) -> None:
         rotation="10 MB",
         retention="7 days",
         enqueue=True,
+        mode="w",
     )
 
     _logger_initialized = True

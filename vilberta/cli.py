@@ -55,6 +55,9 @@ class SimpleCLI:
             status = "▲ speech" if event.content == "up" else "▼ silence"
             print(f"[VAD: {status}]")
 
+        elif event.type == "subsystem_ready":
+            print(f"[✓ {event.content.upper()} ready]")
+
     def cleanup(self) -> None:
         """Cleanup method (no-op for CLI)."""
         pass

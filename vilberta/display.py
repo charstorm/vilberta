@@ -64,4 +64,8 @@ def print_tool_result(tool_name: str, success: bool, result: str) -> None:
     _emit("tool_result", f"{tool_name}|{status}|{result}")
 
 
+def print_subsystem_ready(subsystem: str) -> None:
+    _emit("subsystem_ready", subsystem)
+
+
 # display.py
