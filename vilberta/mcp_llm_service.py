@@ -14,7 +14,8 @@ from vilberta.mcp_service import (
     PruningEvent,
 )
 from vilberta.display import print_status, print_tool_call, print_tool_result
-from vilberta.sound_effects import play_tool_call_start
+from vilberta.sound_effects import play_tool_call_error
+
 from vilberta.tts_engine import TTSEngine
 
 
@@ -151,12 +152,11 @@ class MCPAwareLLMService(BaseLLMService):
 
             if isinstance(event, ToolCallEvent):
                 active_tool = event.tool_name
-                # Don't play sound for inform_user_about_toolcall since it has TTS
-                if event.tool_name != "inform_user_about_toolcall":
-                    play_tool_call_start()
                 print_tool_call(event.tool_name, event.arguments)
             elif isinstance(event, ToolResultEvent):
                 active_tool = None
+                if not event.success:
+                    play_tool_call_error()
                 print_tool_result(event.tool_name, event.success, event.result)
             elif isinstance(event, InformUserEvent):
                 # Start TTS in background thread
