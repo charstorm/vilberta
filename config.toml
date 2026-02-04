@@ -3,7 +3,8 @@
 
 [GENERAL]
 # Mode: "basic" or "mcp"
-mode = "basic"
+# mode = "basic"
+mode = "mcp"
 
 [LLM_API]
 api_base_url = "https://openrouter.ai/api/v1"
@@ -12,7 +13,7 @@ api_key_env = "OPENROUTER_API_KEY"
 # Three-step pipeline uses different models for each step:
 transcriber_llm_model_name = "google/gemini-2.5-flash-lite"
 basic_chat_llm_model_name = "openai/gpt-4o-mini"
-toolcall_chat_llm_model_name = "openai/gpt-4o-mini"
+toolcall_chat_llm_model_name = "google/gemini-2.5-flash"
 
 [TTS]
 # Supported voices: alba, marius, javert, jean, fantine, cosette, eponine, azelma

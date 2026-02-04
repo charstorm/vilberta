@@ -96,8 +96,6 @@ class ASRService:
         self.logger.debug("Starting transcription")
         cfg = get_config()
 
-        print("CONTEXT:", context_words)
-
         user_text = "Transcribe the audio and respond in JSON format as instructed."
         if context_words:
             context_section = _build_context_section(context_words)
