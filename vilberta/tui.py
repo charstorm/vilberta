@@ -443,7 +443,9 @@ class VilbertaTUI(App[None]):
             if len(parts) >= 2:
                 tool_name, status = parts[0], parts[1]
                 icon = "✅" if status == "OK" else "❌"
-                events_log.write(f"{icon} {tool_name}", "event" if status == "OK" else "error")
+                events_log.write(
+                    f"{icon} {tool_name}", "event" if status == "OK" else "error"
+                )
             else:
                 events_log.write(f"🔧 {event.content[:35]}", "event")
 

@@ -38,9 +38,11 @@ Core application modules:
 - `__init__.py` - Package initialization
 - `__main__.py` - Entry point (`python -m vilberta`)
 - `main.py` - Main application logic, voice loop, preflight checks, boot sequence
-- `config.py` - Configuration constants (API, audio, VAD, TTS settings), dataclasses (Section, SectionType), and shared types
+- `config.py` - Configuration constants (API, audio, VAD, TTS settings), dataclasses (Section, SectionType, VADConfig, AudioState, Config), and shared types. Loads from config.toml
+- `logger.py` - Logger initialization using loguru with file rotation, formatting, and retention settings. Provides `get_logger()` function
+- `asr_service.py` - ASR (Automatic Speech Recognition) service using a lightweight LLM to transcribe audio with optional conversation context words
 - `audio_capture.py` - Audio recording with Silero VAD, audio-to-base64 conversion
-- `llm_service.py` - OpenRouter LLM client, non-streaming responses, conversation history management. Contains `_parse_response()` for parsing tagged LLM output
+- `llm_service.py` - OpenRouter LLM client, non-streaming responses, conversation history management. Defines BaseLLMService abstract class and BasicLLMService implementation
 - `mcp_service.py` - MCP (Model Context Protocol) service for tool calling. Connects to MCP server, manages tool execution loop
 - `mcp_llm_service.py` - Wrapper around MCPService providing sync interface for basic LLM service compatibility
 - `text_section_splitter.py` - Generic streaming text section splitter with inner delimiters. Used by llm_service and mcp_service for parsing tagged responses
@@ -70,7 +72,6 @@ Temporary files (logs, chat history, todo lists). Ignore files here.
 The assistant responds with tagged sections:
 - `[speak]...[/speak]` - Spoken responses (text-to-speech)
 - `[text]...[/text]` - Text-only responses (no TTS)
-- `[transcript]...[/transcript]` - User transcript extracted from audio
 
 ### Modes
 - **Basic mode**: Direct LLM interaction without tools (uses BasicLLMService)
