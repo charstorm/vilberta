@@ -21,6 +21,9 @@ Vilberta intelligently separates conversational responses (audio) from visual co
 - **Audio Feedback**: Sound effects for user events and system states
 - **Rich Terminal Interface**: Basic CLI and TUI (Text User Interface) options
 
+> [!NOTE]
+> **There is no echo cancellation**, so use a headset or use some conference call speaker with built-in echo cancellation capabilities -- to avoid speaker audio going back into mic.
+
 ## Architecture
 
 Vilberta uses a three-stage pipeline approach instead of direct speech-to-speech models. This design choice was made because multimodal models currently have poor tool calling capabilities, which are essential for practical applications.
@@ -101,4 +104,6 @@ Configure the mode in `config.toml` before starting the application.
 
 ## Contributing
 
-Vibe-coded PRs are encouraged! Just make sure to test your changes before submitting.
+Vibe-coded PRs are encouraged! But please keep them usable and stable.
+
+Make sure to fix issues with `ruff check vilberta` and `mypy --strict vilberta` before submitting.
