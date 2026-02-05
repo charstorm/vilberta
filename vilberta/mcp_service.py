@@ -43,11 +43,13 @@ _INFORM_TOOL = {
 _TAG_SECTIONS = [
     StreamSection("[speak]", "[/speak]", inner_split_on=["\n"]),
     StreamSection("[text]", "[/text]", inner_split_on=None),
+    StreamSection("[uncommon_words]", "[/uncommon_words]", inner_split_on=None),
 ]
 
 _TAG_OPEN = {
     "[speak]": SectionType.SPEAK,
     "[text]": SectionType.TEXT,
+    "[uncommon_words]": SectionType.UNCOMMON_WORDS,
 }
 
 _TAG_STRINGS = {s.starting_tag for s in _TAG_SECTIONS} | {
@@ -451,32 +453,44 @@ class MCPService:
             if isinstance(content, str):
                 last["content"] = content + "\n[interrupted by user]"
 
-    def get_unique_words(self, max_words: int = 100) -> list[str]:
-        """Extract unique words from user and assistant messages for ASR context.
+    def get_uncommon_words(self, max_words: int = 10) -> list[str]:
+        """Extract uncommon words from all assistant responses in history.
 
-        Only considers messages with role 'user' or 'assistant' (excludes tool calls).
-        Returns sorted list of unique words, limited to max_words.
+        Parses all assistant messages for [uncommon_words] sections and returns
+        a unique list of the words listed there. These are technical terms the LLM identified
+        from its own responses to help with ASR transcription.
+
+        Returns empty list if no uncommon_words sections are found.
         """
-        import re
-
-        words: set[str] = set()
+        unique_words: set[str] = set()
 
         for msg in self.messages:
-            role = msg.get("role", "")
-            if role not in ("user", "assistant"):
+            if msg.get("role") != "assistant":
                 continue
 
             content = msg.get("content", "")
             if not isinstance(content, str):
                 continue
 
-            # Extract words (alphanumeric, 2+ chars)
-            found = re.findall(r"\b[a-zA-Z]{2,}\b", content.lower())
-            words.update(found)
+            # Parse the response to find uncommon_words sections
+            sections = self._parse_response(content)
 
-        # Sort alphabetically and limit
-        sorted_words = sorted(words)
-        return sorted_words[:max_words]
+            for section in sections:
+                if section.type == SectionType.UNCOMMON_WORDS:
+                    # Split by commas, clean up whitespace, filter empties
+                    words = {w.strip() for w in section.content.split(",") if w.strip()}
+                    unique_words.update(words)
+
+        return list(unique_words)[:max_words]
+
+    def get_unique_words(self, max_words: int = 100) -> list[str]:
+        """Extract uncommon words from the most recent assistant response for ASR context.
+
+        Returns uncommon words if a [uncommon_words] section is present in the last assistant
+        response. Returns empty list if no uncommon_words section is found.
+        """
+        cfg = get_config()
+        return self.get_uncommon_words(cfg.max_uncommon_words)
 
     async def cleanup(self) -> None:
         """Close MCP connection."""

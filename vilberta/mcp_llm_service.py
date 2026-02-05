@@ -213,6 +213,10 @@ class MCPAwareLLMService(BaseLLMService):
         """Mark that user interrupted."""
         self.mcp_service.mark_interrupted()
 
+    def get_uncommon_words(self, max_words: int = 10) -> list[str]:
+        """Extract uncommon words from the most recent assistant response for ASR context."""
+        return self.mcp_service.get_uncommon_words(max_words)
+
     def get_unique_words(self, max_words: int = 100) -> list[str]:
         """Extract unique words from conversation history for ASR context."""
         return self.mcp_service.get_unique_words(max_words)

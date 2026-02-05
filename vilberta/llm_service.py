@@ -15,11 +15,13 @@ PROMPT_PATH = Path(__file__).parent / "prompts" / "system.md"
 _TAG_SECTIONS = [
     StreamSection("[speak]", "[/speak]", inner_split_on=["\n"]),
     StreamSection("[text]", "[/text]", inner_split_on=None),
+    StreamSection("[uncommon_words]", "[/uncommon_words]", inner_split_on=None),
 ]
 
 _TAG_OPEN = {
     "[speak]": SectionType.SPEAK,
     "[text]": SectionType.TEXT,
+    "[uncommon_words]": SectionType.UNCOMMON_WORDS,
 }
 
 _TAG_STRINGS = {s.starting_tag for s in _TAG_SECTIONS} | {
@@ -76,32 +78,44 @@ class ConversationHistory:
     def get_api_messages(self, system_prompt: str) -> list[dict[str, Any]]:
         return [{"role": "system", "content": system_prompt}] + self.messages
 
-    def get_unique_words(self, max_words: int = 100) -> list[str]:
-        """Extract unique words from user and assistant messages for ASR context.
+    def get_uncommon_words(self, max_words: int = 10) -> list[str]:
+        """Extract uncommon words from all assistant responses in history.
 
-        Only considers messages with role 'user' or 'assistant' (excludes tool calls).
-        Returns sorted list of unique words, limited to max_words.
+        Parses all assistant messages for [uncommon_words] sections and returns
+        a unique list of the words listed there. These are technical terms the LLM identified
+        from its own responses to help with ASR transcription.
+
+        Returns empty list if no uncommon_words sections are found.
         """
-        words: set[str] = set()
+        unique_words: set[str] = set()
 
         for msg in self.messages:
-            role = msg.get("role", "")
-            if role not in ("user", "assistant"):
+            if msg.get("role") != "assistant":
                 continue
 
             content = msg.get("content", "")
             if not isinstance(content, str):
                 continue
 
-            # Extract words (alphanumeric, 2+ chars)
-            import re
+            # Parse the response to find uncommon_words sections
+            sections = _parse_response(content)
 
-            found = re.findall(r"\b[a-zA-Z]{2,}\b", content.lower())
-            words.update(found)
+            for section in sections:
+                if section.type == SectionType.UNCOMMON_WORDS:
+                    # Split by commas, clean up whitespace, filter empties
+                    words = {w.strip() for w in section.content.split(",") if w.strip()}
+                    unique_words.update(words)
 
-        # Sort alphabetically and limit
-        sorted_words = sorted(words)
-        return sorted_words[:max_words]
+        return list(unique_words)[:max_words]
+
+    def get_unique_words(self, max_words: int = 100) -> list[str]:
+        """Extract uncommon words from the most recent assistant response for ASR context.
+
+        Returns uncommon words if a [uncommon_words] section is present in the last assistant
+        response. Returns empty list if no uncommon_words section is found.
+        """
+        cfg = get_config()
+        return self.get_uncommon_words(cfg.max_uncommon_words)
 
 
 class BaseLLMService(ABC):
@@ -151,6 +165,11 @@ class BaseLLMService(ABC):
     @abstractmethod
     def last_latency_s(self) -> float:
         """Total latency of last request in seconds."""
+        ...
+
+    @abstractmethod
+    def get_uncommon_words(self, max_words: int = 10) -> list[str]:
+        """Extract uncommon words from the most recent assistant response for ASR context."""
         ...
 
     @abstractmethod
@@ -246,9 +265,13 @@ class BasicLLMService(BaseLLMService):
         if last["role"] == "assistant" and isinstance(last["content"], str):
             last["content"] = last["content"] + "\n[interrupted by user]"
 
+    def get_uncommon_words(self, max_words: int = 10) -> list[str]:
+        """Extract uncommon words from the most recent assistant response for ASR context."""
+        return self.history.get_uncommon_words(max_words)
+
     def get_unique_words(self, max_words: int = 100) -> list[str]:
-        """Extract unique words from conversation history for ASR context."""
-        return self.history.get_unique_words(max_words)
+        """Extract uncommon words from conversation history for ASR context."""
+        return self.history.get_uncommon_words(max_words)
 
 
 # Keep alias for backward compatibility

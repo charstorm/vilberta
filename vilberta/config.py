@@ -11,6 +11,7 @@ from numpy.typing import NDArray
 class SectionType(Enum):
     SPEAK = "speak"
     TEXT = "text"
+    UNCOMMON_WORDS = "uncommon_words"
 
 
 @dataclass
@@ -52,6 +53,9 @@ class Config:
     max_hist_threshold_size: int = 16
     hist_reset_size: int = 8
 
+    # Uncommon words settings for ASR context
+    max_uncommon_words: int = 10
+
     # MCP Turn-based pruning settings
     mcp_max_turns: int = 10
     mcp_pruned_turns: int = 6
@@ -85,6 +89,7 @@ class Config:
         tts = data.get("TTS", {})
         chat = data.get("CHAT", {})
         mcp = data.get("MCP", {})
+        uncommon_words = data.get("UNCOMMON_WORDS", {})
 
         return cls(
             mode=general.get("mode", cls.mode),
@@ -112,6 +117,9 @@ class Config:
             ),
             mcp_tool_redact_window=mcp.get(
                 "tool_redact_window", cls.mcp_tool_redact_window
+            ),
+            max_uncommon_words=uncommon_words.get(
+                "max_uncommon_words", cls.max_uncommon_words
             ),
         )
 

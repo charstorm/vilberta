@@ -1,10 +1,13 @@
 import numpy as np
 from scipy import signal as scipy_signal
 import sounddevice as sd
+import warnings
+
 
 import torch
 
-torch.backends.nnpack.enabled = False  # type: ignore[attr-defined]  # noqa: E402
+torch.backends.nnpack.enabled = False  # type: ignore[attr-defined]
+warnings.filterwarnings("ignore", message="Could not initialize NNPACK")
 
 from pocket_tts import TTSModel  # noqa: E402
 
