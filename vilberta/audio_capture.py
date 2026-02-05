@@ -134,6 +134,12 @@ def record_speech(
 
     if handler.completed_audio is not None:
         duration_s = len(handler.completed_audio) / cfg.sample_rate
+        min_duration_s = cfg.min_audio_duration_ms / 1000.0
+        if duration_s < min_duration_s:
+            logger.info(
+                f"Audio too short ({duration_s:.2f}s < {cfg.min_audio_duration_ms}ms), discarded"
+            )
+            return None
         logger.info(f"Recording complete: {duration_s:.2f}s audio captured")
     else:
         logger.debug("Recording ended with no audio captured")

@@ -44,6 +44,7 @@ class Config:
     min_silence_duration_ms: int = 1200
     speech_pad_ms: int = 300
     max_speech_duration_sec: int = 300
+    min_audio_duration_ms: int = 500
 
     # TTS settings
     tts_voice: str = "fantine"
@@ -90,6 +91,7 @@ class Config:
         chat = data.get("CHAT", {})
         mcp = data.get("MCP", {})
         uncommon_words = data.get("UNCOMMON_WORDS", {})
+        vad = data.get("VAD", {})
 
         return cls(
             mode=general.get("mode", cls.mode),
@@ -120,6 +122,20 @@ class Config:
             ),
             max_uncommon_words=uncommon_words.get(
                 "max_uncommon_words", cls.max_uncommon_words
+            ),
+            vad_threshold=vad.get("threshold", cls.vad_threshold),
+            min_speech_duration_ms=vad.get(
+                "min_speech_duration_ms", cls.min_speech_duration_ms
+            ),
+            min_silence_duration_ms=vad.get(
+                "min_silence_duration_ms", cls.min_silence_duration_ms
+            ),
+            speech_pad_ms=vad.get("speech_pad_ms", cls.speech_pad_ms),
+            max_speech_duration_sec=vad.get(
+                "max_speech_duration_sec", cls.max_speech_duration_sec
+            ),
+            min_audio_duration_ms=vad.get(
+                "min_audio_duration_ms", cls.min_audio_duration_ms
             ),
         )
 

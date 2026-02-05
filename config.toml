@@ -8,12 +8,14 @@ mode = "basic"
 
 [LLM_API]
 api_base_url = "https://openrouter.ai/api/v1"
+# This is not the key, but the environment variable that will be used
 api_key_env = "OPENROUTER_API_KEY"
 
 # Three-step pipeline uses different models for each step:
-# transcriber_llm_model_name = "google/gemini-2.5-flash-lite"
-transcriber_llm_model_name = "mistralai/voxtral-small-24b-2507"
-basic_chat_llm_model_name = "openai/gpt-4o-mini"
+# transcriber_llm_model_name = "mistralai/voxtral-small-24b-2507"
+transcriber_llm_model_name = "google/gemini-2.5-flash-lite"
+# basic_chat_llm_model_name = "openai/gpt-4o-mini"
+basic_chat_llm_model_name = "google/gemini-2.5-flash"
 toolcall_chat_llm_model_name = "google/gemini-2.5-flash"
 
 [TTS]
@@ -27,3 +29,18 @@ hist_reset_size = 8
 [MCP]
 # MCP server URL for tool calling (only used when mode = "mcp")
 server_url = "http://localhost:8000/mcp"
+
+[VAD]
+# Voice Activity Detection settings
+# threshold: VAD sensitivity (0.0-1.0, higher = less sensitive)
+threshold = 0.5
+# min_speech_duration_ms: minimum speech before silence can end recording
+min_speech_duration_ms = 300
+# min_silence_duration_ms: silence duration to trigger end of recording
+min_silence_duration_ms = 1200
+# speech_pad_ms: padding added to start/end of recordings
+speech_pad_ms = 300
+# max_speech_duration_sec: maximum recording duration before force stop
+max_speech_duration_sec = 300
+# min_audio_duration_ms: minimum final audio duration to process (filters short noises)
+min_audio_duration_ms = 500
